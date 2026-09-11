@@ -35,11 +35,15 @@ Put a reverse proxy in front of port 8080. The explorer's P2P listener is loopba
 
 ## Public API
 
-All routes are read-only JSON.
+All routes are read-only. The two aggregator shortcuts return plain text; the
+other API routes return JSON.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/status` | tip, index height, node connections, difficulty, hash rate, supply and QDAY state |
+| `GET /api/status` | tip, connections, difficulty, hash rate, supply, reward schedule and QDAY state |
+| `GET /api/supply` | node-verified issued, burned, current, immature, circulating and maximum supply |
+| `GET /api/circulating-supply` | synchronized circulating supply as plain text for aggregators |
+| `GET /api/total-supply` | synchronized current supply as plain text for aggregators |
 | `GET /api/blocks?limit=20&offset=0` | latest canonical blocks |
 | `GET /api/blocks/{height-or-id}` | block header, reward, fees and transactions |
 | `GET /api/transactions/recent?limit=20&offset=0` | recent transfers, proofs and mempool entries |
@@ -50,6 +54,11 @@ All routes are read-only JSON.
 | `GET /readyz` | chain and address index readiness |
 
 Amounts include a formatted QDAY value and the exact atomic integer.
+
+The explorer reads supply from the local QDAY node's `/api/supply` endpoint;
+it does not calculate a competing value. Public API clients may burst 30
+requests and then receive two requests per second, equivalent to 120 per minute.
+Excess requests return HTTP 429 with `Retry-After`.
 
 ## Network
 

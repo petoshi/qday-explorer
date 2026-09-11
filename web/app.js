@@ -56,6 +56,50 @@ function amount(value) {
   return `${commas(value?.qday || '0')} <span class="unit">QDAY</span>`;
 }
 
+function compactCoins(value) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number)) return commas(value);
+  const units = [
+    [1e12, 'T'],
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'K']
+  ];
+  for (const [divisor, suffix] of units) {
+    if (Math.abs(number) >= divisor) {
+      return (number / divisor).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') + suffix;
+    }
+  }
+  return Math.round(number).toLocaleString('en-US');
+}
+
+function compactWork(value) {
+  try {
+    const work = BigInt(value);
+    const units = [
+      [10n ** 24n, 'Y'],
+      [10n ** 21n, 'Z'],
+      [10n ** 18n, 'E'],
+      [10n ** 15n, 'P'],
+      [10n ** 12n, 'T'],
+      [10n ** 9n, 'G'],
+      [10n ** 6n, 'M'],
+      [10n ** 3n, 'K']
+    ];
+    for (const [divisor, suffix] of units) {
+      if (work >= divisor) {
+        const hundredths = (work * 100n + divisor / 2n) / divisor;
+        const whole = hundredths / 100n;
+        const fraction = String(hundredths % 100n).padStart(2, '0').replace(/0+$/, '');
+        return `${whole}${fraction ? `.${fraction}` : ''}${suffix}`;
+      }
+    }
+    return work.toString();
+  } catch (_) {
+    return String(value ?? '0');
+  }
+}
+
 function statusFingerprint(status) {
   if (!status) return '';
   return [
@@ -66,8 +110,14 @@ function statusFingerprint(status) {
     status.qday.stage,
     status.qday.height,
     status.qday.proofPending,
-    status.qday.proofTransaction
+    status.qday.proofTransaction,
+    status.currentSupply?.atomic,
+    status.circulatingSupply?.atomic
   ].join('|');
+}
+
+function qdayStageLabel(stage) {
+  return stage === 'WAITING' ? 'UNBROKEN' : stage;
 }
 
 function breadcrumbs(items) {
@@ -94,9 +144,40 @@ function searchPanel() {
   </section>`;
 }
 
-function metric(label, value, note = '', href = '') {
+function metric(label, value, note = '', href = '', title = '') {
   const content = `<span>${e(label)}</span><strong>${e(value)}</strong>${note ? `<small>${e(note)}</small>` : ''}`;
-  return href ? `<a class="metric route-link" href="${e(href)}">${content}</a>` : `<div class="metric">${content}</div>`;
+  const titleAttribute = title ? ` title="${e(title)}"` : '';
+  return href ? `<a class="metric route-link" href="${e(href)}"${titleAttribute}>${content}</a>` : `<div class="metric"${titleAttribute}>${content}</div>`;
+}
+
+function supplyMetric(status) {
+  const values = [
+    ['Issued QDAY', status.issuedSupply, 'issued'],
+    ['Burned QDAY', status.burnedSupply, 'burned'],
+    ['Current QDAY', status.currentSupply, 'current']
+  ];
+  return `<div class="metric supply-metric"><span>Supply</span><div class="supply-values">${values.map(([label, value, style]) => `
+    <div class="supply-point ${style}" title="${e(commas(value.qday))} QDAY">
+      <small>${e(label)}</small><strong>${e(compactCoins(value.qday))}</strong>
+    </div>`).join('')}</div></div>`;
+}
+
+function emissionMetric(status) {
+  const total = Number(status.rewardBlocksTotal || 0);
+  const remaining = Number(status.rewardBlocksRemaining || 0);
+  return `<div class="metric emission-metric"><span>Emission</span><div class="emission-values">
+    <div class="emission-point" title="Maximum issued supply: ${e(commas(status.maximumIssuedSupply.qday))} QDAY. Confirmed burns do not change the issuance cap."><small>Max supply QDAY</small><strong>${e(compactCoins(status.maximumIssuedSupply.qday))}</strong></div>
+    <div class="emission-point" title="Current base reward: ${e(commas(status.blockReward.qday))} QDAY"><small>Block reward QDAY</small><strong>${e(compactCoins(status.blockReward.qday))}</strong></div>
+    <div class="emission-point" title="${e(commas(remaining))} reward blocks remain out of ${e(commas(total))}. Rewards end after block ${e(commas(total))}."><small>Reward blocks left</small><strong>${e(compactCoins(remaining))}</strong></div>
+  </div></div>`;
+}
+
+function networkMetric(status) {
+  const stateNote = status.qday.stage === 'WAITING' ? 'Canary unbroken' : `Block ${commas(status.qday.height)}`;
+  return `<div class="metric network-metric"><span>Network</span><div class="network-values">
+    <div class="network-point"><small>Connections</small><strong>${e(commas(status.connections))}</strong><em>${e(commas(status.mempoolTransactions))} in mempool</em></div>
+    <a class="network-point route-link" href="/qday"><small>QDAY state</small><strong>${e(qdayStageLabel(status.qday.stage))}</strong><em>${e(stateNote)}</em></a>
+  </div></div>`;
 }
 
 function tableEmpty(columns, message) {
@@ -120,12 +201,12 @@ function blockTable(blocks) {
 
 function transactionTable(transactions) {
   const rows = transactions?.length ? transactions.map(tx => `<tr data-href="/transaction/${e(tx.id)}" tabindex="0">
-    <td><span class="type-badge ${tx.mempool ? 'pending' : tx.kind === 'QDAY PROOF' ? 'qday' : ''}">${e(tx.kind)}</span></td>
+    <td><span class="type-badge ${tx.mempool ? 'pending' : tx.kind === 'QDAY PROOF' ? 'qday' : tx.kind === 'BURN' ? 'burn' : ''}">${e(tx.kind)}</span></td>
     <td class="hash-cell"><a class="hash-link route-link" href="/transaction/${e(tx.id)}" title="${e(tx.id)}">${e(tx.id)}</a></td>
     <td>${tx.mempool ? '<span class="status pending">Mempool</span>' : `<a class="primary-link route-link" href="/block/${e(tx.height)}">${commas(tx.height)}</a>`}</td>
     <td title="${e(exactTime(tx.timestamp))}">${e(relativeTime(tx.timestamp))}</td>
     <td class="address-cell">${tx.from ? `<a class="hash-link route-link" href="/address/${e(tx.from)}" title="${e(tx.from)}">${e(tx.from)}</a>` : '—'}</td>
-    <td class="address-cell">${tx.to ? `<a class="hash-link route-link" href="/address/${e(tx.to)}" title="${e(tx.to)}">${e(tx.to)}</a>` : '—'}</td>
+    <td class="address-cell">${tx.kind === 'BURN' ? '<span class="burn-label">VOID</span>' : tx.to ? `<a class="hash-link route-link" href="/address/${e(tx.to)}" title="${e(tx.to)}">${e(tx.to)}</a>` : '—'}</td>
     <td class="numeric">${amount(tx.value)}</td>
     <td class="numeric">${amount(tx.fee)}</td>
   </tr>`).join('') : tableEmpty(8, 'No transactions found.');
@@ -137,7 +218,7 @@ function transactionTable(transactions) {
 
 function eventTable(events) {
   const rows = events?.length ? events.map(event => `<tr data-href="/${e(event.target)}/${e(event.linkID)}" tabindex="0">
-    <td><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : ''}">${e(event.kind)}</span></td>
+    <td><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : event.kind === 'BURN' ? 'burn' : ''}">${e(event.kind)}</span></td>
     <td class="hash-cell"><a class="hash-link route-link" href="/${e(event.target)}/${e(event.linkID)}" title="${e(event.id)}">${e(event.id)}</a></td>
     <td><a class="primary-link route-link" href="/block/${e(event.height)}">${commas(event.height)}</a></td>
     <td title="${e(exactTime(event.timestamp))}">${e(relativeTime(event.timestamp))}</td>
@@ -172,7 +253,7 @@ function identifier(label, value) {
 
 function ioTable(entries) {
   const rows = entries?.length ? entries.map(item => `<tr>
-    <td class="hash-cell"><a class="hash-link route-link" href="/address/${e(item.address)}" title="${e(item.address)}">${e(item.address)}</a></td>
+    <td class="hash-cell">${item.burn ? '<span class="burn-label">VOID — PERMANENTLY BURNED</span>' : `<a class="hash-link route-link" href="/address/${e(item.address)}" title="${e(item.address)}">${e(item.address)}</a>`}</td>
     <td class="hash-cell"><span class="hash-text" title="${e(item.outputID)}">${e(item.outputID)}</span></td>
     <td class="numeric">${amount(item.value)}</td>
   </tr>`).join('') : tableEmpty(3, 'None');
@@ -195,10 +276,10 @@ async function renderHome(token) {
     <section class="metrics-grid">
       ${metric('Latest block', commas(status.height), exactTime(status.lastBlock), `/block/${status.height}`)}
       ${metric('Network hashrate', status.estimatedHashrate, 'BLAKE2b-256 estimate')}
-      ${metric('Difficulty', commas(status.difficulty), `Target ${short(status.target, 8, 8)}`)}
-      ${metric('Gross supply', `${commas(status.grossSupply.qday)} QDAY`, `Reward ${commas(status.blockReward.qday)} QDAY`)}
-      ${metric('Connections', commas(status.connections), `${commas(status.mempoolTransactions)} mempool transactions`)}
-      ${metric('QDAY state', status.qday.stage, status.qday.stage === 'WAITING' ? 'Canary proof not confirmed' : `Activation height ${commas(status.qday.height)}`, '/qday')}
+      ${metric('Difficulty', compactWork(status.difficulty), `${commas(status.difficulty)} expected hashes`, '', `Target ${status.target}`)}
+      ${supplyMetric(status)}
+      ${emissionMetric(status)}
+      ${networkMetric(status)}
     </section>
     ${card('Latest blocks', blockTable(blocks.blocks), '<a class="card-action route-link" href="/blocks">View all blocks →</a>')}
     ${card('Latest transactions', transactionTable(transactions.transactions), '<a class="card-action route-link" href="/transactions">View all transactions →</a>')}
@@ -270,7 +351,7 @@ async function renderBlock(id, token) {
       ['Parent block', block.height ? `<a class="hash-link route-link" href="/block/${e(block.parentID)}">${e(block.parentID)}</a>` : '—', block.height > 0],
       ['Target', `<code>${e(block.target)}</code>`, true],
       ['Commitment', `<code>${e(block.commitment)}</code>`, true],
-      ['QDAY state', block.qday.stage]
+      ['QDAY state', qdayStageLabel(block.qday.stage)]
     ]))}
     ${card('Transactions', transactionTable(block.transactions), `<span class="card-meta">${commas(block.transactions.length)}</span>`)}
     ${blockNavigation}
@@ -284,21 +365,23 @@ async function renderTransaction(id, token) {
   updateBar(status);
   document.title = `Transaction ${short(transaction.id)} | QDAY Explorer`;
   const blockValue = transaction.mempool ? '<span class="status pending">Mempool</span>' : `<a class="primary-link route-link" href="/block/${e(transaction.blockID)}">Block ${commas(transaction.height)}</a>`;
+  const overview = [
+    ['Status', transaction.mempool ? 'Mempool' : 'Confirmed'],
+    ['Block', blockValue, true],
+    ['Timestamp', transaction.mempool ? 'Pending' : exactTime(transaction.timestamp)],
+    ['Confirmations', commas(transaction.confirmations)],
+    ['Type', transaction.kind],
+    ['Input total', `${commas(transaction.inputTotal.qday)} QDAY`],
+    ['Output total', `${commas(transaction.outputTotal.qday)} QDAY`],
+    ['Fee', `${commas(transaction.fee.qday)} QDAY`],
+    ['DEFEND nonce', transaction.defendNonce]
+  ];
+  if (transaction.burned?.atomic !== '0') overview.splice(7, 0, ['Burned', `${commas(transaction.burned.qday)} QDAY`]);
   paint(token, `
     ${pageHeader('Transaction', transaction.mempool ? 'Unconfirmed' : `${commas(transaction.confirmations)} confirmation${transaction.confirmations === 1 ? '' : 's'}`, [{label:'Overview',href:'/'},{label:'Transactions',href:'/transactions'},{label:short(transaction.id)}], '/transactions', 'Back to transactions')}
     ${identifier('Transaction ID', transaction.id)}
     ${transaction.qdayProof ? '<div class="notice">This transaction contains a valid QDAY canary proof.</div>' : ''}
-    ${card('Overview', detailList([
-      ['Status', transaction.mempool ? 'Mempool' : 'Confirmed'],
-      ['Block', blockValue, true],
-      ['Timestamp', transaction.mempool ? 'Pending' : exactTime(transaction.timestamp)],
-      ['Confirmations', commas(transaction.confirmations)],
-      ['Type', transaction.kind],
-      ['Input total', `${commas(transaction.inputTotal.qday)} QDAY`],
-      ['Output total', `${commas(transaction.outputTotal.qday)} QDAY`],
-      ['Fee', `${commas(transaction.fee.qday)} QDAY`],
-      ['DEFEND nonce', transaction.defendNonce]
-    ]))}
+    ${card('Overview', detailList(overview))}
     <section class="split-grid">${card('Inputs', ioTable(transaction.inputs), `<span class="card-meta">${commas(transaction.inputs.length)}</span>`)}${card('Outputs', ioTable(transaction.outputs), `<span class="card-meta">${commas(transaction.outputs.length)}</span>`)}</section>
     <nav class="record-navigation"><span></span><a class="route-link" href="/transactions">All transactions</a><span></span></nav>
   `);
@@ -353,7 +436,7 @@ async function renderQday(token) {
   const proof = status.qday.proofPending || status.qday.proofTransaction;
   paint(token, `
     ${pageHeader('QDAY status', qdaySummary(status), [{label:'Overview',href:'/'},{label:'QDAY status'}], '/', 'Overview')}
-    <section class="state-card"><div><span>Consensus state</span><strong>${e(status.qday.stage)}</strong></div><div><span>Accepted proofs</span><strong>${commas(status.qday.acceptedProofs)}</strong></div><div><span>Mempool proof</span><strong>${status.qday.proofPending ? 'YES' : 'NO'}</strong></div></section>
+    <section class="state-card"><div><span>Consensus state</span><strong>${e(qdayStageLabel(status.qday.stage))}</strong></div><div><span>Accepted proofs</span><strong>${commas(status.qday.acceptedProofs)}</strong></div><div><span>Mempool proof</span><strong>${status.qday.proofPending ? 'YES' : 'NO'}</strong></div></section>
     ${identifier('Fixed Edwards25519 canary', status.qday.canary)}
     ${card('Consensus parameters', detailList([
       ['Challenge', status.qday.challenge],

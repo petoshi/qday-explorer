@@ -31,6 +31,20 @@ type amount struct {
 	Atomic string `json:"atomic"`
 }
 
+type supplyStatus struct {
+	Network             string `json:"network"`
+	Height              uint64 `json:"height"`
+	Synced              bool   `json:"synced"`
+	UnitAtomic          string `json:"unitAtomic"`
+	IssuedSupply        amount `json:"issuedSupply"`
+	BurnedSupply        amount `json:"burnedSupply"`
+	CurrentSupply       amount `json:"currentSupply"`
+	ImmatureSupply      amount `json:"immatureSupply"`
+	CirculatingSupply   amount `json:"circulatingSupply"`
+	MaximumIssuedSupply amount `json:"maximumIssuedSupply"`
+	UnspentOutputs      uint64 `json:"unspentOutputs"`
+}
+
 type blockSummary struct {
 	Height       uint64 `json:"height"`
 	ID           string `json:"id"`
@@ -72,6 +86,9 @@ func (a *app) handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "height": tip.Height})
 	})
 	mux.HandleFunc("/api/status", a.api(a.status))
+	mux.HandleFunc("/api/supply", a.api(a.supply))
+	mux.HandleFunc("/api/circulating-supply", a.plainSupply(func(s supplyStatus) amount { return s.CirculatingSupply }))
+	mux.HandleFunc("/api/total-supply", a.plainSupply(func(s supplyStatus) amount { return s.CurrentSupply }))
 	mux.HandleFunc("/api/blocks", a.api(a.blocks))
 	mux.HandleFunc("/api/blocks/", a.api(a.block))
 	mux.HandleFunc("/api/transactions/recent", a.api(a.recentTransactions))
@@ -79,7 +96,10 @@ func (a *app) handler() http.Handler {
 	mux.HandleFunc("/api/addresses/", a.api(a.address))
 	mux.HandleFunc("/api/search", a.api(a.search))
 	mux.HandleFunc("/", a.serveWeb)
-	return mux
+	if a.apiLimiter == nil {
+		a.apiLimiter = newAPIRateLimiter()
+	}
+	return a.apiLimiter.handler(mux)
 }
 
 func (a *app) networkSynced(indexed types.ChainIndex) bool {
@@ -131,6 +151,100 @@ func (a *app) connectionCount(ctx context.Context) int {
 	}
 	a.nodeConnections.Store(int64(status.Connections) + 1)
 	return status.Connections
+}
+
+func (a *app) nodeSupply(ctx context.Context) (supplyStatus, error) {
+	if a.nodeStatusURL == "" || a.nodeHTTP == nil {
+		return supplyStatus{}, errors.New("QDAY node supply API is unavailable")
+	}
+	u, err := url.Parse(a.nodeStatusURL)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	u.Path, u.RawQuery, u.Fragment = "/api/supply", "", ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	req.Host = req.URL.Host
+	response, err := a.nodeHTTP.Do(req)
+	if err != nil {
+		return supplyStatus{}, fmt.Errorf("QDAY node supply request failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return supplyStatus{}, fmt.Errorf("QDAY node supply returned HTTP %d", response.StatusCode)
+	}
+	var supply supplyStatus
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 32<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&supply); err != nil {
+		return supplyStatus{}, fmt.Errorf("invalid QDAY node supply response: %w", err)
+	} else if decoder.Decode(new(any)) != io.EOF {
+		return supplyStatus{}, errors.New("invalid trailing QDAY node supply response")
+	} else if supply.Network != a.manifest.Network.Name {
+		return supplyStatus{}, errors.New("QDAY node supply belongs to another network")
+	}
+	parse := func(label string, value amount) (types.Currency, error) {
+		currency, err := types.ParseCurrency(value.Atomic)
+		if err != nil || value.QDAY == "" {
+			return types.ZeroCurrency, fmt.Errorf("invalid %s in QDAY node supply response", label)
+		}
+		return currency, nil
+	}
+	issued, err := parse("issued supply", supply.IssuedSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	burned, err := parse("burned supply", supply.BurnedSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	current, err := parse("current supply", supply.CurrentSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	immature, err := parse("immature supply", supply.ImmatureSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	circulating, err := parse("circulating supply", supply.CirculatingSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	maximum, err := parse("maximum issued supply", supply.MaximumIssuedSupply)
+	if err != nil {
+		return supplyStatus{}, err
+	}
+	if burned.Cmp(issued) > 0 || issued.Sub(burned) != current || immature.Cmp(current) > 0 || current.Sub(immature) != circulating || current.Cmp(maximum) > 0 {
+		return supplyStatus{}, errors.New("inconsistent QDAY node supply response")
+	}
+	return supply, nil
+}
+
+func (a *app) supply(r *http.Request) (any, error) {
+	supply, err := a.nodeSupply(r.Context())
+	if err != nil {
+		return nil, apiError{http.StatusServiceUnavailable, err}
+	}
+	return supply, nil
+}
+
+func (a *app) plainSupply(selectAmount func(supplyStatus) amount) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		supply, err := a.nodeSupply(r.Context())
+		if err != nil || !supply.Synced {
+			http.Error(w, "synchronized supply is unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Cache-Control", "public, max-age=15")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = fmt.Fprintln(w, selectAmount(supply).QDAY)
+	}
 }
 
 func (a *app) api(fn func(*http.Request) (any, error)) http.HandlerFunc {
@@ -281,10 +395,15 @@ func (a *app) status(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	supply, err := a.nodeSupply(r.Context())
+	if err != nil {
+		return nil, apiError{http.StatusServiceUnavailable, err}
+	}
+	rewardBlocksTotal := a.manifest.Network.Qday.MiningBlocks
+	rewardedBlocks := min(tip.Height, rewardBlocksTotal)
+	rewardBlocksRemaining := rewardBlocksTotal - rewardedBlocks
 	stage, remaining := qdayStage(cs)
 	unit := cs.QdayUnits(cs.Index.Height)
-	minedHeight := min(tip.Height, a.manifest.Network.Qday.MiningBlocks)
-	gross := a.manifest.Network.Qday.PremineAmount.Add(a.manifest.Network.Qday.Reward.Mul64(minedHeight))
 	var lastBlock string
 	if block, ok := a.cm.Block(tip.ID); ok {
 		lastBlock = block.Timestamp.UTC().Format(time.RFC3339)
@@ -312,21 +431,32 @@ func (a *app) status(r *http.Request) (any, error) {
 		}
 	}
 	return map[string]any{
-		"network":             a.manifest.Network.Name,
-		"version":             version,
-		"genesis":             a.manifest.Genesis.ID().String(),
-		"height":              tip.Height,
-		"indexedHeight":       indexed.Height,
-		"synced":              a.networkSynced(indexed),
-		"connections":         a.connectionCount(r.Context()),
-		"mempoolTransactions": len(a.cm.V2PoolTransactions()),
-		"lastBlock":           lastBlock,
-		"difficulty":          cs.Difficulty.String(),
-		"target":              cs.PoWTarget().String(),
-		"estimatedHashrate":   prettyHashrate(cs.Difficulty, int64(a.manifest.Network.BlockInterval/time.Second)),
-		"blockReward":         asAmount(cs.BlockReward(), unit),
-		"grossSupply":         asAmount(gross, unit),
-		"unitAtomic":          unit.ExactString(),
+		"network":               a.manifest.Network.Name,
+		"version":               version,
+		"genesis":               a.manifest.Genesis.ID().String(),
+		"height":                tip.Height,
+		"indexedHeight":         indexed.Height,
+		"synced":                a.networkSynced(indexed),
+		"connections":           a.connectionCount(r.Context()),
+		"mempoolTransactions":   len(a.cm.V2PoolTransactions()),
+		"lastBlock":             lastBlock,
+		"difficulty":            cs.Difficulty.String(),
+		"target":                cs.PoWTarget().String(),
+		"estimatedHashrate":     prettyHashrate(cs.Difficulty, int64(a.manifest.Network.BlockInterval/time.Second)),
+		"blockReward":           asAmount(cs.BlockReward(), unit),
+		"rewardedBlocks":        rewardedBlocks,
+		"rewardBlocksTotal":     rewardBlocksTotal,
+		"rewardBlocksRemaining": rewardBlocksRemaining,
+		"grossSupply":           supply.IssuedSupply,
+		"issuedSupply":          supply.IssuedSupply,
+		"burnedSupply":          supply.BurnedSupply,
+		"currentSupply":         supply.CurrentSupply,
+		"immatureSupply":        supply.ImmatureSupply,
+		"circulatingSupply":     supply.CirculatingSupply,
+		"maximumIssuedSupply":   supply.MaximumIssuedSupply,
+		"supplyHeight":          supply.Height,
+		"supplySynced":          supply.Synced,
+		"unitAtomic":            supply.UnitAtomic,
 		"qday": map[string]any{
 			"stage":                  stage,
 			"height":                 cs.QdayHeight,
@@ -522,6 +652,11 @@ func transactionKind(txn types.V2Transaction) (string, consensus.QdayEnvelope) {
 	}
 	switch env.Kind {
 	case consensus.QdayTransfer:
+		for _, output := range txn.SiacoinOutputs {
+			if output.Address == types.VoidAddress {
+				return "BURN", env
+			}
+		}
 		return "TRANSFER", env
 	case consensus.QdayCoinbase:
 		return "MINER MARKER", env
@@ -544,8 +679,16 @@ func summarizeTransaction(txn types.V2Transaction, height *uint64, timestamp tim
 	}
 	var transferred types.Currency
 	to := ""
+	if kind == "BURN" {
+		for _, output := range txn.SiacoinOutputs {
+			if output.Address == types.VoidAddress {
+				transferred = transferred.Add(output.Value)
+			}
+		}
+		to = "BURN"
+	}
 	for _, output := range txn.SiacoinOutputs {
-		if !inputAddresses[output.Address] {
+		if kind != "BURN" && !inputAddresses[output.Address] {
 			transferred = transferred.Add(output.Value)
 			if to == "" {
 				to = qdayAddress(output.Address)
@@ -783,14 +926,26 @@ func (a *app) transaction(r *http.Request) (any, error) {
 		})
 	}
 	outputs := make([]map[string]any, 0, len(txn.SiacoinOutputs))
-	var outputTotal types.Currency
+	var outputTotal, explicitlyBurned types.Currency
 	for i, output := range txn.SiacoinOutputs {
 		outputTotal = outputTotal.Add(output.Value)
+		burn := output.Address == types.VoidAddress
+		address := qdayAddress(output.Address)
+		if burn {
+			explicitlyBurned = explicitlyBurned.Add(output.Value)
+			address = "BURN"
+		}
 		outputs = append(outputs, map[string]any{
 			"outputID": txn.SiacoinOutputID(txn.ID(), i).String(),
-			"address":  qdayAddress(output.Address),
+			"address":  address,
 			"value":    asAmount(output.Value, unit),
+			"burn":     burn,
 		})
+	}
+	burned := explicitlyBurned
+	accounted := outputTotal.Add(txn.MinerFee)
+	if inputTotal.Cmp(accounted) > 0 {
+		burned = burned.Add(inputTotal.Sub(accounted))
 	}
 	var height any
 	var blockID string
@@ -810,6 +965,7 @@ func (a *app) transaction(r *http.Request) (any, error) {
 		"inputTotal":    asAmount(inputTotal, unit),
 		"outputTotal":   asAmount(outputTotal, unit),
 		"fee":           asAmount(txn.MinerFee, unit),
+		"burned":        asAmount(burned, unit),
 		"defendNonce":   strconv.FormatUint(env.Nonce, 10),
 		"qdayProof":     kind == "QDAY PROOF",
 	}, nil

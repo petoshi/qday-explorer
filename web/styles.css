@@ -162,6 +162,28 @@ a.metric:hover { background: #fff5e9; }
 .metric strong { display: block; margin-top: 7px; overflow: hidden; font: 800 clamp(25px, 2.2vw, 35px)/1.1 Barlow, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
 .metric small { margin-top: 7px; overflow: hidden; color: var(--ink-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .unit { color: inherit; font-size: .68em; font-weight: 700; }
+.supply-metric { justify-content: flex-start; padding-top: 18px; padding-bottom: 16px; }
+.supply-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1; align-items: center; margin-top: 9px; }
+.supply-point { min-width: 0; padding: 0 9px; border-left: 1px solid var(--paper-line); }
+.supply-point:first-child { padding-left: 0; border-left: 0; }
+.supply-point:last-child { padding-right: 0; }
+.supply-point small { display: block; margin: 0; color: var(--ink-muted); font-size: 8px; font-style: normal; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.supply-point strong { margin-top: 4px; font-size: clamp(19px, 1.65vw, 27px); }
+.supply-point.burned strong { color: #9a3c35; }
+.supply-point.current strong { color: var(--accent-dark); }
+.emission-metric, .network-metric { justify-content: flex-start; padding-top: 18px; padding-bottom: 15px; }
+.emission-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); flex: 1; align-items: center; margin-top: 9px; }
+.emission-point { min-width: 0; padding: 0 9px; border-left: 1px solid var(--paper-line); }
+.emission-point:first-child { padding-left: 0; border-left: 0; }
+.emission-point:last-child { padding-right: 0; }
+.emission-point small, .network-point small { display: block; margin: 0; color: var(--ink-muted); font-size: 8px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.emission-point strong { display: block; margin-top: 3px; font-size: clamp(18px, 1.45vw, 24px); }
+.network-point em { display: block; margin-top: 3px; overflow: hidden; color: var(--ink-muted); font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.network-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1; align-items: center; margin-top: 9px; }
+.network-point { min-width: 0; color: var(--ink); }
+.network-point + .network-point { padding-left: 18px; border-left: 1px solid var(--paper-line); }
+.network-point strong { margin-top: 4px; font-size: clamp(22px, 1.85vw, 30px); }
+a.network-point:hover strong { color: var(--accent-dark); }
 
 .card { margin-bottom: 22px; border: 1px solid var(--paper-line); background: var(--paper); color: var(--ink); }
 .card-header { display: flex; min-height: 58px; align-items: center; padding: 0 20px; border-bottom: 1px solid var(--paper-line); background: var(--paper-raised); }
@@ -204,6 +226,8 @@ a.metric:hover { background: #fff5e9; }
 .type-badge, .status, .direction { display: inline-flex; align-items: center; width: max-content; padding: 4px 7px; border: 1px solid #aea69d; border-radius: 3px; background: #ece7e0; color: #4e4a47; font-size: 9px; font-weight: 800; letter-spacing: .05em; }
 .type-badge.pending, .status.pending { border-color: #c89448; background: #f6e4c7; color: #74470d; }
 .type-badge.qday { border-color: #9a72bd; background: #eadff3; color: #633780; }
+.type-badge.burn { border-color: #b45e58; background: #f2d9d5; color: #842f2b; }
+.burn-label { color: #8c302c; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
 .direction.in { border-color: #76a17c; background: #dfebdf; color: #315e39; }
 .direction.out { border-color: #bb7670; background: #f2dfdc; color: #873b35; }
 
@@ -298,6 +322,13 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
   .search-panel button { min-height: 46px; border-radius: 0 0 3px 3px; }
   .metrics-grid, .state-card { grid-template-columns: 1fr; }
   .metric { min-height: 103px; }
+  .supply-metric { min-height: 122px; }
+  .supply-point { padding-right: 12px; padding-left: 12px; }
+  .supply-point strong { font-size: 25px; }
+  .emission-metric { min-height: 122px; }
+  .network-metric { min-height: 140px; }
+  .emission-point strong { font-size: 23px; }
+  .network-point strong { font-size: 27px; }
   .page-header-row { display: grid; }
   .page-header-row .button { justify-self: start; }
   .identifier { align-items: flex-start; flex-direction: column; }

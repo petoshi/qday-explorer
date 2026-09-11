@@ -47,6 +47,7 @@ type app struct {
 	nodeStatusURL   string
 	nodeHTTP        *http.Client
 	nodeConnections atomic.Int64
+	apiLimiter      *apiRateLimiter
 }
 
 func loadManifest(path string) (m chain.QdayManifest, err error) {
@@ -187,6 +188,7 @@ func newApp(dataDir, manifestPath string, peers []string, nodeStatusURL string, 
 		queries:       make(chan struct{}, 24),
 		static:        http.FileServer(http.FS(staticRoot)),
 		nodeStatusURL: nodeStatusURL,
+		apiLimiter:    newAPIRateLimiter(),
 		nodeHTTP: &http.Client{
 			Timeout: 2 * time.Second,
 			Transport: &http.Transport{
