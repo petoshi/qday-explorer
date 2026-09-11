@@ -61,6 +61,7 @@ function statusFingerprint(status) {
   return [
     status.height,
     status.indexedHeight,
+    status.connections,
     status.mempoolTransactions,
     status.qday.stage,
     status.qday.height,
@@ -196,7 +197,7 @@ async function renderHome(token) {
       ${metric('Network hashrate', status.estimatedHashrate, 'BLAKE2b-256 estimate')}
       ${metric('Difficulty', commas(status.difficulty), `Target ${short(status.target, 8, 8)}`)}
       ${metric('Gross supply', `${commas(status.grossSupply.qday)} QDAY`, `Reward ${commas(status.blockReward.qday)} QDAY`)}
-      ${metric('Connected peers', commas(status.peers), `${commas(status.mempoolTransactions)} mempool transactions`)}
+      ${metric('Connections', commas(status.connections), `${commas(status.mempoolTransactions)} mempool transactions`)}
       ${metric('QDAY state', status.qday.stage, status.qday.stage === 'WAITING' ? 'Canary proof not confirmed' : `Activation height ${commas(status.qday.height)}`, '/qday')}
     </section>
     ${card('Latest blocks', blockTable(blocks.blocks), '<a class="card-action route-link" href="/blocks">View all blocks →</a>')}

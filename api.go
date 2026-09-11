@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -90,6 +92,45 @@ func (a *app) networkSynced(indexed types.ChainIndex) bool {
 		}
 	}
 	return false
+}
+
+func (a *app) connectionCount(ctx context.Context) int {
+	fallback := 0
+	if a.sy != nil {
+		fallback = len(a.sy.Peers())
+	}
+	cached := func() int {
+		if value := a.nodeConnections.Load(); value > 0 {
+			return int(value - 1)
+		}
+		return fallback
+	}
+	if a.nodeStatusURL == "" || a.nodeHTTP == nil {
+		return cached()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.nodeStatusURL, nil)
+	if err != nil {
+		return cached()
+	}
+	req.Host = req.URL.Host
+	response, err := a.nodeHTTP.Do(req)
+	if err != nil {
+		return cached()
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return cached()
+	}
+	var status struct {
+		Network     string `json:"network"`
+		Connections int    `json:"connections"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 16<<10))
+	if decoder.Decode(&status) != nil || status.Network != a.manifest.Network.Name || status.Connections < 0 {
+		return cached()
+	}
+	a.nodeConnections.Store(int64(status.Connections) + 1)
+	return status.Connections
 }
 
 func (a *app) api(fn func(*http.Request) (any, error)) http.HandlerFunc {
@@ -233,7 +274,7 @@ func qdayStage(cs consensus.State) (stage string, remaining uint64) {
 	return "WAITING", 0
 }
 
-func (a *app) status(_ *http.Request) (any, error) {
+func (a *app) status(r *http.Request) (any, error) {
 	tip := a.cm.Tip()
 	cs := a.cm.TipState()
 	indexed, err := a.wm.Tip()
@@ -277,7 +318,7 @@ func (a *app) status(_ *http.Request) (any, error) {
 		"height":              tip.Height,
 		"indexedHeight":       indexed.Height,
 		"synced":              a.networkSynced(indexed),
-		"peers":               len(a.sy.Peers()),
+		"connections":         a.connectionCount(r.Context()),
 		"mempoolTransactions": len(a.cm.V2PoolTransactions()),
 		"lastBlock":           lastBlock,
 		"difficulty":          cs.Difficulty.String(),

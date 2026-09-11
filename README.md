@@ -27,7 +27,8 @@ For a server already running a QDAY node, connect the indexer to that node over 
   -network /etc/qday/qday-mainnet.json \
   -data /var/lib/qday-explorer \
   -listen 127.0.0.1:8080 \
-  -peers 127.0.0.1:19771
+  -peers 127.0.0.1:19771 \
+  -node-status http://127.0.0.1:19770/api/network-status
 ```
 
 Put a reverse proxy in front of port 8080. The explorer's P2P listener is loopback-only and accepts no inbound peers.
@@ -38,7 +39,7 @@ All routes are read-only JSON.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/status` | tip, index height, peers, difficulty, hash rate, supply and QDAY state |
+| `GET /api/status` | tip, index height, node connections, difficulty, hash rate, supply and QDAY state |
 | `GET /api/blocks?limit=20&offset=0` | latest canonical blocks |
 | `GET /api/blocks/{height-or-id}` | block header, reward, fees and transactions |
 | `GET /api/transactions/recent?limit=20&offset=0` | recent transfers, proofs and mempool entries |

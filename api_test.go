@@ -1,11 +1,40 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go.sia.tech/core/consensus"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/chain"
 )
+
+func TestConnectionCountFromNode(t *testing.T) {
+	manifest := chain.QdayDevnet()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/network-status" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"network":     manifest.Network.Name,
+			"connections": 42,
+		})
+	}))
+	a := app{
+		manifest:      manifest,
+		nodeStatusURL: server.URL + "/api/network-status",
+		nodeHTTP:      server.Client(),
+	}
+	if got := a.connectionCount(context.Background()); got != 42 {
+		t.Fatalf("got %d connections, want 42", got)
+	}
+	server.Close()
+	if got := a.connectionCount(context.Background()); got != 42 {
+		t.Fatalf("lost cached connection count: got %d, want 42", got)
+	}
+}
 
 func TestFormatAmount(t *testing.T) {
 	unit := types.HastingsPerSiacoin

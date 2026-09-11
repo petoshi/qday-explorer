@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,13 +37,16 @@ var (
 )
 
 type app struct {
-	manifest chain.QdayManifest
-	cm       *chain.Manager
-	wm       *wallet.Manager
-	sy       *syncer.Syncer
-	started  time.Time
-	queries  chan struct{}
-	static   http.Handler
+	manifest        chain.QdayManifest
+	cm              *chain.Manager
+	wm              *wallet.Manager
+	sy              *syncer.Syncer
+	started         time.Time
+	queries         chan struct{}
+	static          http.Handler
+	nodeStatusURL   string
+	nodeHTTP        *http.Client
+	nodeConnections atomic.Int64
 }
 
 func loadManifest(path string) (m chain.QdayManifest, err error) {
@@ -85,7 +89,7 @@ func parsePeers(s string) ([]string, error) {
 	return peers, nil
 }
 
-func newApp(dataDir, manifestPath string, peers []string, logger *zap.Logger) (*app, func(), error) {
+func newApp(dataDir, manifestPath string, peers []string, nodeStatusURL string, logger *zap.Logger) (*app, func(), error) {
 	manifest, err := loadManifest(manifestPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load manifest: %w", err)
@@ -175,13 +179,21 @@ func newApp(dataDir, manifestPath string, peers []string, logger *zap.Logger) (*
 		return nil, nil, err
 	}
 	a := &app{
-		manifest: manifest,
-		cm:       cm,
-		wm:       wm,
-		sy:       sy,
-		started:  time.Now().UTC(),
-		queries:  make(chan struct{}, 24),
-		static:   http.FileServer(http.FS(staticRoot)),
+		manifest:      manifest,
+		cm:            cm,
+		wm:            wm,
+		sy:            sy,
+		started:       time.Now().UTC(),
+		queries:       make(chan struct{}, 24),
+		static:        http.FileServer(http.FS(staticRoot)),
+		nodeStatusURL: nodeStatusURL,
+		nodeHTTP: &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				Proxy:             nil,
+				DisableKeepAlives: false,
+			},
+		},
 	}
 	return a, func() {
 		_ = wm.Close()
@@ -208,6 +220,7 @@ func main() {
 	dataDir := flag.String("data", "explorer-data", "explorer chain and index directory")
 	listenAddr := flag.String("listen", "127.0.0.1:8080", "public HTTP listen address")
 	peerString := flag.String("peers", "seed1.pqday.com:19771,seed2.pqday.com:19771,seed3.pqday.com:19771", "comma-separated QDAY peers")
+	nodeStatusURL := flag.String("node-status", "http://127.0.0.1:19770/api/network-status", "local QDAY node network-status URL")
 	showVersion := flag.Bool("version", false, "print version")
 	flag.Parse()
 	if *showVersion {
@@ -223,7 +236,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer logger.Sync()
-	a, closeApp, err := newApp(*dataDir, *manifestPath, peers, logger)
+	a, closeApp, err := newApp(*dataDir, *manifestPath, peers, *nodeStatusURL, logger)
 	if err != nil {
 		logger.Fatal("explorer startup failed", zap.Error(err))
 	}
@@ -247,6 +260,7 @@ func main() {
 		zap.String("http", *listenAddr),
 		zap.String("genesis", a.manifest.Genesis.ID().String()),
 		zap.Strings("peers", peers),
+		zap.String("nodeStatus", *nodeStatusURL),
 	)
 	select {
 	case <-ctx.Done():
