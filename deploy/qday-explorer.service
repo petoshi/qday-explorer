@@ -1,0 +1,30 @@
+[Unit]
+Description=QDAY mainnet explorer
+After=network-online.target qday.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qday-explorer
+Group=qday-explorer
+ExecStart=/usr/local/bin/qday-explorer -network /etc/qday-explorer/qday-mainnet.json -data /var/lib/qday-explorer -listen 127.0.0.1:8080 -peers 127.0.0.1:19771
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/qday-explorer
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
