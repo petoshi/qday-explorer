@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.sia.tech/core/consensus"
@@ -67,6 +73,134 @@ type txSummary struct {
 	Mempool       bool    `json:"mempool"`
 }
 
+const (
+	premineAddressText = "qday1pdsa0ezy7y3nnmnxm0tx74q2kd9acvzs8329wfd2n6ycqnmygtt9stpwtsr"
+	richListLimit      = 20
+)
+
+type addressSnapshot struct {
+	Basis       types.ChainIndex
+	State       consensus.State
+	Spendable   types.Currency
+	Nominal     types.Currency
+	Immature    types.Currency
+	LiveOutputs int
+	Shielded    int
+	Decaying    int
+	Expired     int
+}
+
+type richBalance struct {
+	Address types.Address
+	Value   types.Currency
+}
+
+type richListIndex struct {
+	db *sql.DB
+
+	mu        sync.Mutex
+	index     types.ChainIndex
+	cached    bool
+	addresses int
+	entries   []richBalance
+}
+
+func openRichListIndex(indexPath string) (*richListIndex, error) {
+	absPath, err := filepath.Abs(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite3", "file:"+filepath.ToSlash(absPath)+"?mode=ro&_busy_timeout=5000")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &richListIndex{db: db}, nil
+}
+
+func decodeRichCurrency(buf []byte) (types.Currency, error) {
+	if len(buf) != 16 {
+		return types.ZeroCurrency, fmt.Errorf("invalid currency length %d", len(buf))
+	}
+	return types.Currency{
+		Hi: binary.BigEndian.Uint64(buf[:8]),
+		Lo: binary.BigEndian.Uint64(buf[8:]),
+	}, nil
+}
+
+func queryRichBalances(db *sql.DB, state consensus.State, index types.ChainIndex) ([]richBalance, int, error) {
+	rows, err := db.Query(`
+		SELECT sa.sia_address, se.siacoin_value, se.maturity_height
+		FROM siacoin_elements se
+		JOIN sia_addresses sa ON sa.id = se.address_id
+		WHERE se.spent_index_id IS NULL AND se.maturity_height <= ?`, index.Height)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	balances := make(map[types.Address]types.Currency)
+	for rows.Next() {
+		var addressBuf, valueBuf []byte
+		var maturityHeight int64
+		if err := rows.Scan(&addressBuf, &valueBuf, &maturityHeight); err != nil {
+			return nil, 0, err
+		} else if len(addressBuf) != len(types.Address{}) || maturityHeight < 0 {
+			return nil, 0, errors.New("invalid rich-list output in explorer index")
+		}
+		value, err := decodeRichCurrency(valueBuf)
+		if err != nil {
+			return nil, 0, err
+		}
+		var address types.Address
+		copy(address[:], addressBuf)
+		if address == types.VoidAddress {
+			continue
+		}
+		value = state.QdayValue(types.SiacoinElement{
+			SiacoinOutput:  types.SiacoinOutput{Address: address, Value: value},
+			MaturityHeight: uint64(maturityHeight),
+		}, index.Height)
+		if !value.IsZero() {
+			balances[address] = balances[address].Add(value)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	entries := make([]richBalance, 0, len(balances))
+	for address, value := range balances {
+		entries = append(entries, richBalance{Address: address, Value: value})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if cmp := entries[i].Value.Cmp(entries[j].Value); cmp != 0 {
+			return cmp > 0
+		}
+		return bytes.Compare(entries[i].Address[:], entries[j].Address[:]) < 0
+	})
+	count := len(entries)
+	if len(entries) > richListLimit {
+		entries = entries[:richListLimit]
+	}
+	return entries, count, nil
+}
+
+func (r *richListIndex) top(state consensus.State, index types.ChainIndex) ([]richBalance, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.cached || r.index != index {
+		entries, addresses, err := queryRichBalances(r.db, state, index)
+		if err != nil {
+			return nil, 0, err
+		}
+		r.index, r.cached, r.entries, r.addresses = index, true, entries, addresses
+	}
+	return append([]richBalance(nil), r.entries...), r.addresses, nil
+}
+
 func (a *app) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +227,8 @@ func (a *app) handler() http.Handler {
 	mux.HandleFunc("/api/blocks/", a.api(a.block))
 	mux.HandleFunc("/api/transactions/recent", a.api(a.recentTransactions))
 	mux.HandleFunc("/api/transactions/", a.api(a.transaction))
+	mux.HandleFunc("/api/premine", a.api(a.premine))
+	mux.HandleFunc("/api/rich-list", a.api(a.richList))
 	mux.HandleFunc("/api/addresses/", a.api(a.address))
 	mux.HandleFunc("/api/search", a.api(a.search))
 	mux.HandleFunc("/", a.serveWeb)
@@ -443,6 +579,7 @@ func (a *app) status(r *http.Request) (any, error) {
 		"difficulty":            cs.Difficulty.String(),
 		"target":                cs.PoWTarget().String(),
 		"estimatedHashrate":     prettyHashrate(cs.Difficulty, int64(a.manifest.Network.BlockInterval/time.Second)),
+		"blockIntervalSeconds":  int64(a.manifest.Network.BlockInterval / time.Second),
 		"blockReward":           asAmount(cs.BlockReward(), unit),
 		"rewardedBlocks":        rewardedBlocks,
 		"rewardBlocksTotal":     rewardBlocksTotal,
@@ -971,26 +1108,17 @@ func (a *app) transaction(r *http.Request) (any, error) {
 	}, nil
 }
 
-func (a *app) address(r *http.Request) (any, error) {
-	value, err := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/addresses/"), "/"))
-	if err != nil {
-		return nil, apiError{http.StatusBadRequest, errors.New("invalid address")}
-	}
-	qaddr, err := types.ParseQdayAddress(strings.ToLower(value))
-	if err != nil {
-		return nil, apiError{http.StatusBadRequest, errors.New("invalid QDAY address")}
-	}
-	addr := types.Address(qaddr)
+func (a *app) addressSnapshot(addr types.Address) (addressSnapshot, error) {
 	balance, err := a.wm.AddressBalance(addr)
 	if err != nil {
-		return nil, err
+		return addressSnapshot{}, err
 	}
 	var outputs []wallet.UnspentSiacoinElement
 	var basis types.ChainIndex
 	for offset := 0; offset < 100_000; offset += 500 {
 		batch, b, err := a.wm.AddressSiacoinOutputs(addr, false, offset, 500)
 		if err != nil {
-			return nil, err
+			return addressSnapshot{}, err
 		}
 		basis = b
 		outputs = append(outputs, batch...)
@@ -1002,40 +1130,47 @@ func (a *app) address(r *http.Request) (any, error) {
 	if indexedState, ok := a.cm.State(basis.ID); ok {
 		state = indexedState
 	}
-	var spendable types.Currency
-	shielded, decaying, dead := 0, 0, 0
+	snapshot := addressSnapshot{
+		Basis:       basis,
+		State:       state,
+		Nominal:     balance.Siacoins,
+		Immature:    balance.ImmatureSiacoins,
+		LiveOutputs: len(outputs),
+	}
 	for _, output := range outputs {
 		value := state.QdayValue(output.SiacoinElement, state.Index.Height)
-		spendable = spendable.Add(value)
+		snapshot.Spendable = snapshot.Spendable.Add(value)
 		if !state.QdayActive(state.Index.Height) {
 			continue
 		}
 		start := max(state.QdayHeight, output.MaturityHeight)
 		if state.Index.Height <= start+state.Network.Qday.ShieldBlocks {
-			shielded++
+			snapshot.Shielded++
 		} else if value.IsZero() {
-			dead++
+			snapshot.Expired++
 		} else {
-			decaying++
+			snapshot.Decaying++
 		}
 	}
-	limit, offset := queryLimit(r, 25, 100), queryOffset(r)
+	return snapshot, nil
+}
+
+func (a *app) addressHistory(addr types.Address, unit types.Currency, offset, limit int) ([]map[string]any, bool, error) {
 	events, err := a.wm.AddressEvents(addr, offset, limit+1)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	hasMore := len(events) > limit
 	if hasMore {
 		events = events[:limit]
 	}
-	unit := state.QdayUnits(state.Index.Height)
 	history := make([]map[string]any, 0, len(events))
 	for _, event := range events {
 		inflow, outflow := event.SiacoinInflow(), event.SiacoinOutflow()
 		direction, value := "IN", inflow
 		if outflow.Cmp(inflow) > 0 {
 			direction, value = "OUT", outflow.Sub(inflow)
-		} else if inflow.Cmp(outflow) >= 0 {
+		} else {
 			value = inflow.Sub(outflow)
 		}
 		kind, target, linkID := strings.ToUpper(event.Type), "transaction", event.ID.String()
@@ -1058,16 +1193,174 @@ func (a *app) address(r *http.Request) (any, error) {
 			"value":         asAmount(value, unit),
 		})
 	}
+	return history, hasMore, nil
+}
+
+func explicitBurnFromAddress(txn types.V2Transaction, addr types.Address) types.Currency {
+	fromAddress := false
+	for _, input := range txn.SiacoinInputs {
+		if input.Parent.SiacoinOutput.Address == addr {
+			fromAddress = true
+			break
+		}
+	}
+	if !fromAddress {
+		return types.ZeroCurrency
+	}
+	var burned types.Currency
+	for _, output := range txn.SiacoinOutputs {
+		if output.Address == types.VoidAddress {
+			burned = burned.Add(output.Value)
+		}
+	}
+	return burned
+}
+
+func (a *app) addressBurns(addr types.Address) (types.Currency, int, error) {
+	var burned types.Currency
+	count := 0
+	seen := make(map[types.TransactionID]bool)
+	for offset := 0; offset < 1_000_000; offset += 500 {
+		events, err := a.wm.AddressEvents(addr, offset, 500)
+		if err != nil {
+			return types.ZeroCurrency, 0, err
+		}
+		for _, event := range events {
+			txn, ok := event.Data.(wallet.EventV2Transaction)
+			if !ok {
+				continue
+			}
+			transaction := types.V2Transaction(txn)
+			id := transaction.ID()
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			value := explicitBurnFromAddress(transaction, addr)
+			if !value.IsZero() {
+				burned = burned.Add(value)
+				count++
+			}
+		}
+		if len(events) < 500 {
+			return burned, count, nil
+		}
+	}
+	return types.ZeroCurrency, 0, errors.New("premine activity exceeds explorer query limit")
+}
+
+func (a *app) premine(r *http.Request) (any, error) {
+	qaddr, err := types.ParseQdayAddress(premineAddressText)
+	if err != nil {
+		return nil, err
+	}
+	addr := types.Address(qaddr)
+	snapshot, err := a.addressSnapshot(addr)
+	if err != nil {
+		return nil, err
+	}
+	unit := snapshot.State.QdayUnits(snapshot.State.Index.Height)
+	var initial types.Currency
+	for _, txn := range a.manifest.Genesis.Transactions {
+		for _, output := range txn.SiacoinOutputs {
+			if output.Address == addr {
+				initial = initial.Add(output.Value)
+			}
+		}
+	}
+	if initial.IsZero() {
+		return nil, errors.New("genesis premine output is missing")
+	}
+	burned, burnTransactions, err := a.addressBurns(addr)
+	if err != nil {
+		return nil, err
+	}
+	left := types.ZeroCurrency
+	if initial.Cmp(burned) > 0 {
+		left = initial.Sub(burned)
+	}
+	limit, offset := queryLimit(r, 50, 100), queryOffset(r)
+	history, hasMore, err := a.addressHistory(addr, unit, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"address":                   qaddr.String(),
+		"indexedHeight":             snapshot.Basis.Height,
+		"synced":                    a.networkSynced(snapshot.Basis),
+		"premine":                   asAmount(initial, unit),
+		"burnedFromPremine":         asAmount(burned, unit),
+		"leftFromPremine":           asAmount(left, unit),
+		"devWalletBalance":          asAmount(snapshot.Spendable, unit),
+		"confirmedBurnTransactions": burnTransactions,
+		"history":                   history,
+		"offset":                    offset,
+		"limit":                     limit,
+		"hasMore":                   hasMore,
+	}, nil
+}
+
+func (a *app) richList(r *http.Request) (any, error) {
+	index, err := a.wm.Tip()
+	if err != nil {
+		return nil, err
+	}
+	state, ok := a.cm.State(index.ID)
+	if !ok {
+		return nil, errors.New("indexed consensus state is unavailable")
+	}
+	balances, addresses, err := a.rich.top(state, index)
+	if err != nil {
+		return nil, err
+	}
+	unit := state.QdayUnits(index.Height)
+	entries := make([]map[string]any, len(balances))
+	for i, balance := range balances {
+		entries[i] = map[string]any{
+			"rank":    i + 1,
+			"address": qdayAddress(balance.Address),
+			"balance": asAmount(balance.Value, unit),
+		}
+	}
+	return map[string]any{
+		"indexedHeight": index.Height,
+		"synced":        a.networkSynced(index),
+		"addresses":     addresses,
+		"limit":         richListLimit,
+		"entries":       entries,
+	}, nil
+}
+
+func (a *app) address(r *http.Request) (any, error) {
+	value, err := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/addresses/"), "/"))
+	if err != nil {
+		return nil, apiError{http.StatusBadRequest, errors.New("invalid address")}
+	}
+	qaddr, err := types.ParseQdayAddress(strings.ToLower(value))
+	if err != nil {
+		return nil, apiError{http.StatusBadRequest, errors.New("invalid QDAY address")}
+	}
+	addr := types.Address(qaddr)
+	snapshot, err := a.addressSnapshot(addr)
+	if err != nil {
+		return nil, err
+	}
+	unit := snapshot.State.QdayUnits(snapshot.State.Index.Height)
+	limit, offset := queryLimit(r, 25, 100), queryOffset(r)
+	history, hasMore, err := a.addressHistory(addr, unit, offset, limit)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"address":        qaddr.String(),
-		"indexedHeight":  basis.Height,
-		"balance":        asAmount(spendable, unit),
-		"nominalBalance": asAmount(balance.Siacoins, unit),
-		"immature":       asAmount(balance.ImmatureSiacoins, unit),
-		"liveOutputs":    len(outputs),
-		"shielded":       shielded,
-		"decaying":       decaying,
-		"expired":        dead,
+		"indexedHeight":  snapshot.Basis.Height,
+		"balance":        asAmount(snapshot.Spendable, unit),
+		"nominalBalance": asAmount(snapshot.Nominal, unit),
+		"immature":       asAmount(snapshot.Immature, unit),
+		"liveOutputs":    snapshot.LiveOutputs,
+		"shielded":       snapshot.Shielded,
+		"decaying":       snapshot.Decaying,
+		"expired":        snapshot.Expired,
 		"history":        history,
 		"offset":         offset,
 		"limit":          limit,

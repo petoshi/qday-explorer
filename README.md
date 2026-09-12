@@ -49,6 +49,8 @@ other API routes return JSON.
 | `GET /api/transactions/recent?limit=20&offset=0` | recent transfers, proofs and mempool entries |
 | `GET /api/transactions/{id}` | inputs, outputs, fee, block and DEFEND nonce |
 | `GET /api/addresses/{qday-address}` | spendable balance, maturity, shield/decay state and history |
+| `GET /api/premine?limit=50&offset=0` | genesis premine, confirmed burns from it, current balance and paginated activity |
+| `GET /api/rich-list` | top 20 confirmed spendable address balances, cached per indexed block |
 | `GET /api/search?q={value}` | resolved explorer path for a height, hash or address |
 | `GET /healthz` | process health |
 | `GET /readyz` | chain and address index readiness |

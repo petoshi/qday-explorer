@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -119,5 +121,89 @@ func TestTransactionKind(t *testing.T) {
 	summary := summarizeTransaction(txn, nil, time.Time{}, 0, types.HastingsPerSiacoin, true)
 	if summary.Kind != "BURN" || summary.To != "BURN" || summary.Value.QDAY != "10" {
 		t.Fatalf("wrong burn summary: %+v", summary)
+	}
+}
+
+func TestExplicitBurnFromAddress(t *testing.T) {
+	var premine, stranger types.Address
+	premine[0] = 1
+	stranger[0] = 2
+	burn := func(source types.Address) types.V2Transaction {
+		return types.V2Transaction{
+			SiacoinInputs: []types.V2SiacoinInput{{
+				Parent: types.SiacoinElement{SiacoinOutput: types.SiacoinOutput{
+					Address: source,
+					Value:   types.Siacoins(100),
+				}},
+			}},
+			SiacoinOutputs: []types.SiacoinOutput{
+				{Address: types.VoidAddress, Value: types.Siacoins(25)},
+				{Address: premine, Value: types.Siacoins(74)},
+			},
+		}
+	}
+	if got := explicitBurnFromAddress(burn(premine), premine); got != types.Siacoins(25) {
+		t.Fatalf("got %v burned from premine, want 25 QDAY", got)
+	}
+	if got := explicitBurnFromAddress(burn(stranger), premine); !got.IsZero() {
+		t.Fatalf("attributed another address's burn to premine: %v", got)
+	}
+}
+
+func TestQueryRichBalances(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE sia_addresses (id INTEGER PRIMARY KEY, sia_address BLOB NOT NULL);
+		CREATE TABLE siacoin_elements (
+			address_id INTEGER NOT NULL,
+			siacoin_value BLOB NOT NULL,
+			maturity_height INTEGER NOT NULL,
+			spent_index_id INTEGER
+		);`); err != nil {
+		t.Fatal(err)
+	}
+	var first, second, immature, spent types.Address
+	first[0], second[0], immature[0], spent[0] = 1, 2, 3, 4
+	addresses := []types.Address{first, second, immature, spent, types.VoidAddress}
+	for i, address := range addresses {
+		if _, err := db.Exec(`INSERT INTO sia_addresses (id, sia_address) VALUES (?, ?)`, i+1, address[:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	encodeCurrency := func(value types.Currency) []byte {
+		buf := make([]byte, 16)
+		binary.BigEndian.PutUint64(buf, value.Hi)
+		binary.BigEndian.PutUint64(buf[8:], value.Lo)
+		return buf
+	}
+	insert := func(addressID int, value uint32, maturity int, spentIndex any) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO siacoin_elements VALUES (?, ?, ?, ?)`, addressID, encodeCurrency(types.Siacoins(value)), maturity, spentIndex); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(1, 100, 0, nil)
+	insert(1, 25, 5, nil)
+	insert(2, 200, 0, nil)
+	insert(3, 500, 11, nil)
+	insert(4, 1000, 0, 9)
+	insert(5, 2000, 0, nil)
+	index := types.ChainIndex{Height: 10}
+	network := chain.QdayDevnet().Network
+	state := network.GenesisState()
+	state.Index = index
+	entries, count, err := queryRichBalances(db, state, index)
+	if err != nil {
+		t.Fatal(err)
+	} else if count != 2 || len(entries) != 2 {
+		t.Fatalf("got %d ranked addresses and %d entries, want 2", count, len(entries))
+	} else if entries[0].Address != second || entries[0].Value != types.Siacoins(200) {
+		t.Fatalf("wrong first entry: %+v", entries[0])
+	} else if entries[1].Address != first || entries[1].Value != types.Siacoins(125) {
+		t.Fatalf("wrong second entry: %+v", entries[1])
 	}
 }

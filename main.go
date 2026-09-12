@@ -48,6 +48,7 @@ type app struct {
 	nodeHTTP        *http.Client
 	nodeConnections atomic.Int64
 	apiLimiter      *apiRateLimiter
+	rich            *richListIndex
 }
 
 func loadManifest(path string) (m chain.QdayManifest, err error) {
@@ -170,8 +171,18 @@ func newApp(dataDir, manifestPath string, peers []string, nodeStatusURL string, 
 		cleanup()
 		return nil, nil, err
 	}
+	rich, err := openRichListIndex(filepath.Join(dataDir, "index.sqlite3"))
+	if err != nil {
+		_ = wm.Close()
+		_ = sy.Close()
+		_ = listener.Close()
+		_ = store.Close()
+		cleanup()
+		return nil, nil, fmt.Errorf("open rich-list index: %w", err)
+	}
 	staticRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {
+		_ = rich.db.Close()
 		_ = wm.Close()
 		_ = sy.Close()
 		_ = listener.Close()
@@ -189,6 +200,7 @@ func newApp(dataDir, manifestPath string, peers []string, nodeStatusURL string, 
 		static:        http.FileServer(http.FS(staticRoot)),
 		nodeStatusURL: nodeStatusURL,
 		apiLimiter:    newAPIRateLimiter(),
+		rich:          rich,
 		nodeHTTP: &http.Client{
 			Timeout: 2 * time.Second,
 			Transport: &http.Transport{
@@ -198,6 +210,7 @@ func newApp(dataDir, manifestPath string, peers []string, nodeStatusURL string, 
 		},
 	}
 	return a, func() {
+		_ = rich.db.Close()
 		_ = wm.Close()
 		_ = sy.Close()
 		_ = listener.Close()

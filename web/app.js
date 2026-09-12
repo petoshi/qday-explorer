@@ -154,33 +154,56 @@ function metric(label, value, note = '', href = '', title = '') {
   return href ? `<a class="metric route-link" href="${e(href)}"${titleAttribute}>${content}</a>` : `<div class="metric"${titleAttribute}>${content}</div>`;
 }
 
+function overviewPoint(label, value, note = '', href = '', title = '') {
+  const content = `<small>${e(label)}</small><strong>${e(value)}</strong>${note ? `<em>${e(note)}</em>` : ''}`;
+  const titleAttribute = title ? ` title="${e(title)}"` : '';
+  return href
+    ? `<a class="overview-point route-link" href="${e(href)}"${titleAttribute}>${content}</a>`
+    : `<div class="overview-point"${titleAttribute}>${content}</div>`;
+}
+
+function chainMetric(status) {
+  const seconds = Number(status.blockIntervalSeconds || 60);
+  return `<div class="overview-panel chain-metric" aria-label="Chain metrics"><div class="overview-values">
+    ${overviewPoint('Latest block', commas(status.height), exactTime(status.lastBlock), `/block/${status.height}`)}
+    ${overviewPoint('Block time', `${commas(seconds)} SEC`, 'Consensus target')}
+  </div></div>`;
+}
+
+function proofOfWorkMetric(status) {
+  return `<div class="overview-panel pow-metric" aria-label="Proof of work metrics"><div class="overview-values">
+    ${overviewPoint('Network hashrate', status.estimatedHashrate, 'BLAKE2b-256 estimate')}
+    ${overviewPoint('Difficulty', compactWork(status.difficulty), `${commas(status.difficulty)} expected hashes`, '', `Target ${status.target}`)}
+  </div></div>`;
+}
+
 function supplyMetric(status) {
   const values = [
-    ['Issued QDAY', status.issuedSupply, 'issued'],
-    ['Burned QDAY', status.burnedSupply, 'burned'],
-    ['Current QDAY', status.currentSupply, 'current']
+    ['Issued', status.issuedSupply, 'issued', false],
+    ['Burned', status.burnedSupply, 'burned', false],
+    ['Current supply', status.currentSupply, 'current', true]
   ];
-  return `<div class="metric supply-metric"><span>Supply</span><div class="supply-values">${values.map(([label, value, style]) => `
+  return `<div class="overview-panel supply-metric" aria-label="Supply metrics"><div class="supply-values">${values.map(([label, value, style, showUnit]) => `
     <div class="supply-point ${style}" title="${e(commas(value.qday))} QDAY">
-      <small>${e(label)}</small><strong>${e(compactCoins(value.qday))}</strong>
+      <small>${e(label)}</small><strong>${e(compactCoins(value.qday))}${showUnit ? ' QDAY' : ''}</strong>
     </div>`).join('')}</div></div>`;
 }
 
 function emissionMetric(status) {
   const total = Number(status.rewardBlocksTotal || 0);
   const remaining = Number(status.rewardBlocksRemaining || 0);
-  return `<div class="metric emission-metric"><span>Emission</span><div class="emission-values">
-    <div class="emission-point" title="Maximum issued supply: ${e(commas(status.maximumIssuedSupply.qday))} QDAY. Confirmed burns do not change the issuance cap."><small>Max supply QDAY</small><strong>${e(compactCoins(status.maximumIssuedSupply.qday))}</strong></div>
-    <div class="emission-point" title="Current base reward: ${e(commas(status.blockReward.qday))} QDAY"><small>Block reward QDAY</small><strong>${e(compactCoins(status.blockReward.qday))}</strong></div>
+  return `<div class="overview-panel emission-metric" aria-label="Emission metrics"><div class="emission-values">
+    <div class="emission-point" title="Maximum issued supply: ${e(commas(status.maximumIssuedSupply.qday))} QDAY. Confirmed burns do not change the issuance cap."><small>Max supply</small><strong>${e(compactCoins(status.maximumIssuedSupply.qday))}</strong></div>
+    <div class="emission-point" title="Current base reward: ${e(commas(status.blockReward.qday))} QDAY"><small>Block reward</small><strong>${e(compactCoins(status.blockReward.qday))}</strong></div>
     <div class="emission-point" title="${e(commas(remaining))} reward blocks remain out of ${e(commas(total))}. Rewards end after block ${e(commas(total))}."><small>Reward blocks left</small><strong>${e(compactCoins(remaining))}</strong></div>
   </div></div>`;
 }
 
 function networkMetric(status) {
   const stateNote = status.qday.stage === 'WAITING' ? 'Canary unbroken' : `Block ${commas(status.qday.height)}`;
-  return `<div class="metric network-metric"><span>Network</span><div class="network-values">
-    <div class="network-point"><small>Connections</small><strong>${e(commas(status.connections))}</strong><em>${e(commas(status.mempoolTransactions))} in mempool</em></div>
-    <a class="network-point route-link" href="/qday"><small>PQ Day state</small><strong>${e(qdayStageLabel(status.qday.stage))}</strong><em>${e(stateNote)}</em></a>
+  return `<div class="overview-panel network-metric" aria-label="Network metrics"><div class="overview-values">
+    ${overviewPoint('Connections', commas(status.connections), `${commas(status.mempoolTransactions)} in mempool`)}
+    ${overviewPoint('PQ Day state', qdayStageLabel(status.qday.stage), stateNote, '/qday')}
   </div></div>`;
 }
 
@@ -235,6 +258,28 @@ function eventTable(events) {
   </table></div>`;
 }
 
+function shareOfSupply(value, supply) {
+  const balance = Number(value?.qday || 0);
+  const total = Number(supply?.qday || 0);
+  if (!Number.isFinite(balance) || !Number.isFinite(total) || total <= 0) return '—';
+  const share = balance / total * 100;
+  const digits = share < .01 ? 4 : share < 1 ? 3 : 2;
+  return `${share.toFixed(digits).replace(/\.0+$/, '')}%`;
+}
+
+function richListTable(entries, supply) {
+  const rows = entries?.length ? entries.map(entry => `<tr data-href="/address/${e(entry.address)}" tabindex="0">
+    <td><span class="rank-number">${commas(entry.rank)}</span></td>
+    <td class="address-cell rich-address"><a class="hash-link route-link" href="/address/${e(entry.address)}" title="${e(entry.address)}">${e(entry.address)}</a></td>
+    <td class="numeric rich-balance">${amount(entry.balance)}</td>
+    <td class="numeric rich-share">${e(shareOfSupply(entry.balance, supply))}</td>
+  </tr>`).join('') : tableEmpty(4, 'No funded addresses found.');
+  return `<div class="table-scroll"><table class="data-table rich-list-table">
+    <thead><tr><th>Rank</th><th>Address</th><th class="numeric">Balance</th><th class="numeric">Share of supply</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
 function card(title, content, action = '') {
   return `<section class="card"><header class="card-header"><h2>${e(title)}</h2>${action}</header>${content}</section>`;
 }
@@ -277,13 +322,12 @@ async function renderHome(token) {
   paint(token, `
     <section class="overview-heading"><div><span class="section-label">QDAY MAINNET</span><h1>Blockchain explorer</h1><p>Blocks, transactions, addresses and consensus status.</p></div><span class="live-update"><i></i> Live updates</span></section>
     ${searchPanel()}
-    <section class="metrics-grid">
-      ${metric('Latest block', commas(status.height), exactTime(status.lastBlock), `/block/${status.height}`)}
-      ${metric('Network hashrate', status.estimatedHashrate, 'BLAKE2b-256 estimate')}
-      ${metric('Difficulty', compactWork(status.difficulty), `${commas(status.difficulty)} expected hashes`, '', `Target ${status.target}`)}
+    <section class="overview-dashboard">
+      ${chainMetric(status)}
+      ${proofOfWorkMetric(status)}
+      ${networkMetric(status)}
       ${supplyMetric(status)}
       ${emissionMetric(status)}
-      ${networkMetric(status)}
     </section>
     ${card('Latest blocks', blockTable(blocks.blocks), '<a class="card-action route-link" href="/blocks">View all blocks →</a>')}
     ${card('Latest transactions', transactionTable(transactions.transactions), '<a class="card-action route-link" href="/transactions">View all transactions →</a>')}
@@ -423,6 +467,77 @@ async function renderAddress(value, token) {
   `);
 }
 
+function premineStat(label, value, className = '', href = '') {
+  const content = `<span>${e(label)}</span><strong>${amount(value)}</strong>`;
+  return href
+    ? `<a class="premine-stat ${e(className)} route-link" href="${e(href)}">${content}<small>View address →</small></a>`
+    : `<div class="premine-stat ${e(className)}">${content}</div>`;
+}
+
+async function renderPremine(token) {
+  const offset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
+  const [data, status] = await Promise.all([
+    api(`/api/premine?limit=50&offset=${offset}`),
+    api('/api/status')
+  ]);
+  if (token !== routeVersion) return;
+  statusCache = status;
+  updateBar(status);
+  document.title = 'Premine | QDAY Explorer';
+  const start = data.history.length ? offset + 1 : 0;
+  const end = offset + data.history.length;
+  const indexState = data.synced ? `CHAIN VERIFIED · BLOCK ${commas(data.indexedHeight)}` : `INDEXING · BLOCK ${commas(data.indexedHeight)}`;
+  paint(token, `
+    ${breadcrumbs([{label:'Overview',href:'/'},{label:'Premine'}])}
+    <section class="premine-hero">
+      <div class="premine-hero-copy">
+        <span class="premine-kicker">PUBLIC DEV WALLET</span>
+        <h1>WATCH MY BAG.</h1>
+        <p>no trust me bro. the address is public. the balance is live. every coin that moves leaves a scar.</p>
+      </div>
+      <div class="premine-identity">
+        <span class="premine-sync"><i></i>${e(indexState)}</span>
+        <a class="premine-address route-link" href="/address/${e(data.address)}">
+          <span>PREMINE ADDRESS</span>
+          <code>${e(data.address)}</code>
+          <b>OPEN ADDRESS →</b>
+        </a>
+      </div>
+    </section>
+    <section class="premine-stats" aria-label="Premine balances">
+      ${premineStat('Premine', data.premine)}
+      ${premineStat('Burned', data.burnedFromPremine, 'burned')}
+      ${premineStat('Left from premine', data.leftFromPremine, 'left')}
+      ${premineStat('Dev wallet balance', data.devWalletBalance, 'wallet', `/address/${data.address}`)}
+    </section>
+    <section class="card premine-activity">
+      <header class="card-header premine-activity-header">
+        <div><h2>EVERY MOVE.</h2><p>burns, sends, incoming junk, whatever happens here.</p></div>
+        <span class="card-meta">${commas(data.confirmedBurnTransactions)} confirmed burn${data.confirmedBurnTransactions === 1 ? '' : 's'}</span>
+      </header>
+      ${eventTable(data.history)}
+    </section>
+    ${pagination({
+      newer: offset ? `/premine?offset=${Math.max(0, offset - 50)}` : '',
+      older: data.hasMore ? `/premine?offset=${offset + 50}` : '',
+      label: data.history.length ? `${commas(start)}–${commas(end)}` : 'No activity'
+    })}
+  `);
+}
+
+async function renderRichList(token) {
+  const [data, status] = await Promise.all([api('/api/rich-list'), api('/api/status')]);
+  if (token !== routeVersion) return;
+  statusCache = status;
+  updateBar(status);
+  document.title = 'Rich List | QDAY Explorer';
+  paint(token, `
+    ${pageHeader('Rich list', `Top ${commas(data.limit || 20)} confirmed spendable balances at block ${commas(data.indexedHeight)}.`, [{label:'Overview',href:'/'},{label:'Rich list'}], '/', 'Overview')}
+    ${card('Top addresses', richListTable(data.entries, status.currentSupply), `<span class="card-meta">${commas(data.addresses)} funded address${data.addresses === 1 ? '' : 'es'}</span>`)}
+    <section class="information-card rich-list-note"><h2>Balance scope</h2><p>Confirmed mature outputs only. Mempool transactions, immature block rewards and burned outputs are excluded.</p></section>
+  `);
+}
+
 function qdaySummary(status) {
   const qday = status.qday;
   if (qday.stage === 'ACTIVE') return `PQ Day began at block ${commas(qday.height)}.`;
@@ -488,7 +603,9 @@ async function route(options = {}) {
     else if (parts[0] === 'block' && parts[1]) await renderBlock(parts.slice(1).join('/'), token);
     else if (parts[0] === 'transaction' && parts[1]) await renderTransaction(parts.slice(1).join('/'), token);
     else if (parts[0] === 'address' && parts[1]) await renderAddress(parts.slice(1).join('/'), token);
+    else if (parts[0] === 'premine' && parts.length === 1) await renderPremine(token);
     else if ((parts[0] === 'qday' || parts[0] === 'death-watch') && parts.length === 1) await renderQday(token);
+    else if (parts[0] === 'rich-list' && parts.length === 1) await renderRichList(token);
     else throw new Error('The requested explorer page does not exist.');
     if (token !== routeVersion) return;
     renderedFingerprint = statusFingerprint(statusCache);

@@ -7,7 +7,7 @@
   <meta name="description" content="QDAY mainnet block explorer for blocks, transactions, addresses and network status.">
   <title>QDAY Explorer</title>
   <link rel="icon" href="/favicon.svg">
-  <link rel="stylesheet" href="/styles.css?v=10">
+  <link rel="stylesheet" href="/styles.css?v=15">
 </head>
 <body>
   <header class="site-header">
@@ -19,8 +19,10 @@
     <nav class="main-nav" aria-label="Main navigation">
       <a class="route-link" data-nav="overview" href="/">Overview</a>
       <a class="route-link" data-nav="blocks" href="/blocks">Blocks</a>
-      <a class="route-link" data-nav="transactions" href="/transactions">Transactions</a>
-      <a class="route-link" data-nav="qday" href="/qday">PQ Day status</a>
+      <a class="route-link" data-nav="transactions" href="/transactions"><span class="nav-long">Transactions</span><span class="nav-short">TXS</span></a>
+      <a class="route-link premine-nav" data-nav="premine" href="/premine">Premine</a>
+      <a class="route-link" data-nav="qday" href="/qday"><span class="nav-long">PQ Day status</span><span class="nav-short">PQ Day</span></a>
+      <a class="route-link" data-nav="rich-list" href="/rich-list"><span class="nav-long">Rich list</span><span class="nav-short">Rich</span></a>
     </nav>
     <nav class="external-nav" aria-label="Project links">
       <a href="https://pqday.com" target="_blank" rel="noreferrer">Website ↗</a>
@@ -44,6 +46,6 @@
   </footer>
 
   <div id="toast" class="toast" role="status"></div>
-  <script src="/app.js?v=11" defer></script>
+  <script src="/app.js?v=15" defer></script>
 </body>
 </html>
