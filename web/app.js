@@ -284,12 +284,45 @@ function card(title, content, action = '') {
   return `<section class="card"><header class="card-header"><h2>${e(title)}</h2>${action}</header>${content}</section>`;
 }
 
-function pagination({newer, older, label}) {
-  return `<nav class="pagination" aria-label="Pagination">
-    ${newer ? `<a class="button secondary route-link" href="${e(newer)}">← Previous</a>` : '<span></span>'}
-    <span>${e(label)}</span>
-    ${older ? `<a class="button secondary route-link" href="${e(older)}">Next →</a>` : '<span></span>'}
-  </nav>`;
+function pageHref(base, page, limit) {
+  return page === 1 ? base : `${base}?offset=${(page - 1) * limit}`;
+}
+
+function visiblePages(current, total) {
+  if (total <= 7) return Array.from({length:total}, (_, index) => index + 1);
+  const pages = new Set([1, total, current - 1, current, current + 1]);
+  if (current <= 4) [2, 3, 4, 5].forEach(page => pages.add(page));
+  if (current >= total - 3) [total - 4, total - 3, total - 2, total - 1].forEach(page => pages.add(page));
+  const sorted = [...pages].filter(page => page > 0 && page <= total).sort((a, b) => a - b);
+  const result = [];
+  sorted.forEach((page, index) => {
+    if (index && page - sorted[index - 1] > 1) result.push(null);
+    result.push(page);
+  });
+  return result;
+}
+
+function pagination({base, offset, limit, total, emptyLabel = 'No results'}) {
+  const count = Math.max(0, Number(total) || 0);
+  if (!count) return `<p class="pagination-summary pagination-empty">${e(emptyLabel)}</p>`;
+  const pageSize = Math.max(1, Number(limit) || 1);
+  const pageCount = Math.max(1, Math.ceil(count / pageSize));
+  const current = Math.min(pageCount, Math.floor(Math.max(0, Number(offset) || 0) / pageSize) + 1);
+  const start = (current - 1) * pageSize + 1;
+  const end = Math.min(current * pageSize, count);
+  const previous = current > 1 ? `<a class="pagination-control route-link" href="${e(pageHref(base, current - 1, pageSize))}" rel="prev"><span class="pagination-full">← Previous</span><span class="pagination-short">← Prev</span></a>` : '<span class="pagination-control disabled" aria-disabled="true"><span class="pagination-full">← Previous</span><span class="pagination-short">← Prev</span></span>';
+  const next = current < pageCount ? `<a class="pagination-control route-link" href="${e(pageHref(base, current + 1, pageSize))}" rel="next"><span class="pagination-full">Next →</span><span class="pagination-short">Next →</span></a>` : '<span class="pagination-control disabled" aria-disabled="true"><span class="pagination-full">Next →</span><span class="pagination-short">Next →</span></span>';
+  const pages = visiblePages(current, pageCount).map(page => {
+    if (page === null) return '<span class="pagination-ellipsis" aria-hidden="true">…</span>';
+    const edge = page === 1 || page === pageCount ? ' edge' : '';
+    return page === current
+      ? `<span class="pagination-page current${edge}" aria-current="page" aria-label="Page ${page}">${commas(page)}</span>`
+      : `<a class="pagination-page${edge} route-link" href="${e(pageHref(base, page, pageSize))}" aria-label="Page ${page}">${commas(page)}</a>`;
+  }).join('');
+  return `<div class="pagination-wrap">
+    <nav class="pagination" aria-label="Pagination">${previous}<div class="pagination-pages">${pages}</div>${next}</nav>
+    <p class="pagination-summary">Showing ${commas(start)}–${commas(end)} of ${commas(count)}</p>
+  </div>`;
 }
 
 function detailList(items) {
@@ -335,39 +368,32 @@ async function renderHome(token) {
 }
 
 async function renderBlocks(token) {
-  const offset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
-  const data = await api(`/api/blocks?limit=50&offset=${offset}`);
+  const requestedOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
+  const data = await api(`/api/blocks?limit=50&offset=${requestedOffset}`);
   if (token !== routeVersion) return;
   document.title = 'Blocks | QDAY Explorer';
-  const total = data.tip + 1;
-  const start = data.blocks.length ? offset + 1 : 0;
-  const end = offset + data.blocks.length;
+  const total = Number(data.total ?? data.tip + 1);
+  const offset = Number(data.offset || 0);
+  const limit = Number(data.limit || 50);
   paint(token, `
     ${pageHeader('Blocks', 'Canonical QDAY mainnet blocks, newest first.', [{label:'Overview',href:'/'},{label:'Blocks'}], '/', 'Overview')}
     ${card('Block list', blockTable(data.blocks), `<span class="card-meta">${commas(total)} total</span>`)}
-    ${pagination({
-      newer: offset ? `/blocks?offset=${Math.max(0, offset - 50)}` : '',
-      older: end < total ? `/blocks?offset=${offset + 50}` : '',
-      label: `${commas(start)}–${commas(end)} of ${commas(total)}`
-    })}
+    ${pagination({base:'/blocks', offset, limit, total, emptyLabel:'No blocks'})}
   `);
 }
 
 async function renderTransactions(token) {
-  const offset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
-  const data = await api(`/api/transactions/recent?limit=50&offset=${offset}`);
+  const requestedOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
+  const data = await api(`/api/transactions/recent?limit=50&offset=${requestedOffset}`);
   if (token !== routeVersion) return;
   document.title = 'Transactions | QDAY Explorer';
-  const start = data.transactions.length ? offset + 1 : 0;
-  const end = offset + data.transactions.length;
+  const offset = Number(data.offset || 0);
+  const limit = Number(data.limit || 50);
+  const total = Number(data.total || 0);
   paint(token, `
     ${pageHeader('Transactions', 'Confirmed and mempool transactions, newest first.', [{label:'Overview',href:'/'},{label:'Transactions'}], '/', 'Overview')}
     ${card('Transaction list', transactionTable(data.transactions), `<span class="card-meta">${data.mempool || 0} in mempool</span>`)}
-    ${pagination({
-      newer: offset ? `/transactions?offset=${Math.max(0, offset - 50)}` : '',
-      older: data.hasMore ? `/transactions?offset=${offset + 50}` : '',
-      label: data.transactions.length ? `${commas(start)}–${commas(end)}` : 'No results'
-    })}
+    ${pagination({base:'/transactions', offset, limit, total})}
   `);
 }
 
@@ -436,17 +462,18 @@ async function renderTransaction(id, token) {
 }
 
 async function renderAddress(value, token) {
-  const offset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
+  const requestedOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
   const [data, status] = await Promise.all([
-    api(`/api/addresses/${encodeURIComponent(value)}?limit=50&offset=${offset}`),
+    api(`/api/addresses/${encodeURIComponent(value)}?limit=50&offset=${requestedOffset}`),
     api('/api/status')
   ]);
   if (token !== routeVersion) return;
   statusCache = status;
   updateBar(status);
   document.title = `Address ${short(data.address)} | QDAY Explorer`;
-  const start = data.history.length ? offset + 1 : 0;
-  const end = offset + data.history.length;
+  const offset = Number(data.offset || 0);
+  const limit = Number(data.limit || 50);
+  const total = Number(data.total || 0);
   paint(token, `
     ${pageHeader('Address', `Indexed at block ${commas(data.indexedHeight)}`, [{label:'Overview',href:'/'},{label:'Address'},{label:short(data.address)}], '/', 'Overview')}
     ${identifier('QDAY address', data.address)}
@@ -458,12 +485,8 @@ async function renderAddress(value, token) {
       ${metric('Decaying outputs', commas(data.decaying))}
       ${metric('Expired outputs', commas(data.expired))}
     </section>
-    ${card('Address history', eventTable(data.history), `<span class="card-meta">Page ${commas(Math.floor(offset / 50) + 1)}</span>`)}
-    ${pagination({
-      newer: offset ? `/address/${e(data.address)}?offset=${Math.max(0, offset - 50)}` : '',
-      older: data.hasMore ? `/address/${e(data.address)}?offset=${offset + 50}` : '',
-      label: data.history.length ? `${commas(start)}–${commas(end)}` : 'No results'
-    })}
+    ${card('Address history', eventTable(data.history), `<span class="card-meta">${commas(total)} events</span>`)}
+    ${pagination({base:`/address/${data.address}`, offset, limit, total, emptyLabel:'No address history'})}
   `);
 }
 
@@ -475,17 +498,18 @@ function premineStat(label, value, className = '', href = '') {
 }
 
 async function renderPremine(token) {
-  const offset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
+  const requestedOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
   const [data, status] = await Promise.all([
-    api(`/api/premine?limit=50&offset=${offset}`),
+    api(`/api/premine?limit=50&offset=${requestedOffset}`),
     api('/api/status')
   ]);
   if (token !== routeVersion) return;
   statusCache = status;
   updateBar(status);
   document.title = 'Premine | QDAY Explorer';
-  const start = data.history.length ? offset + 1 : 0;
-  const end = offset + data.history.length;
+  const offset = Number(data.offset || 0);
+  const limit = Number(data.limit || 50);
+  const total = Number(data.total || 0);
   const indexState = data.synced ? `CHAIN VERIFIED · BLOCK ${commas(data.indexedHeight)}` : `INDEXING · BLOCK ${commas(data.indexedHeight)}`;
   paint(token, `
     ${breadcrumbs([{label:'Overview',href:'/'},{label:'Premine'}])}
@@ -516,11 +540,7 @@ async function renderPremine(token) {
       </header>
       ${eventTable(data.history)}
     </section>
-    ${pagination({
-      newer: offset ? `/premine?offset=${Math.max(0, offset - 50)}` : '',
-      older: data.hasMore ? `/premine?offset=${offset + 50}` : '',
-      label: data.history.length ? `${commas(start)}–${commas(end)}` : 'No activity'
-    })}
+    ${pagination({base:'/premine', offset, limit, total, emptyLabel:'No activity'})}
   `);
 }
 

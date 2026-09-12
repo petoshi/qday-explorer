@@ -14,6 +14,7 @@ import (
 	"go.sia.tech/core/consensus"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/chain"
+	"go.sia.tech/walletd/v2/wallet"
 )
 
 func TestConnectionCountFromNode(t *testing.T) {
@@ -205,5 +206,81 @@ func TestQueryRichBalances(t *testing.T) {
 		t.Fatalf("wrong first entry: %+v", entries[0])
 	} else if entries[1].Address != first || entries[1].Value != types.Siacoins(125) {
 		t.Fatalf("wrong second entry: %+v", entries[1])
+	}
+}
+
+func TestPaginationIndexCounts(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE sia_addresses (id INTEGER PRIMARY KEY, sia_address BLOB NOT NULL);
+		CREATE TABLE events (id INTEGER PRIMARY KEY, event_type TEXT NOT NULL);
+		CREATE TABLE event_addresses (event_id INTEGER NOT NULL, address_id INTEGER NOT NULL);`); err != nil {
+		t.Fatal(err)
+	}
+	var first, second types.Address
+	first[0], second[0] = 1, 2
+	if _, err := db.Exec(`INSERT INTO sia_addresses VALUES (1, ?), (2, ?)`, first[:], second[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO events VALUES
+		(1, ?), (2, ?), (3, ?), (4, ?)`,
+		wallet.EventTypeV1Transaction,
+		wallet.EventTypeV2Transaction,
+		wallet.EventTypeV2Transaction,
+		wallet.EventTypeMinerPayout,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_addresses VALUES (1, 1), (2, 1), (3, 2), (4, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	index := &richListIndex{db: db}
+	chainIndex := types.ChainIndex{Height: 12}
+	if got, err := index.transactionEventCount(chainIndex); err != nil {
+		t.Fatal(err)
+	} else if got != 3 {
+		t.Fatalf("got %d transaction events, want 3", got)
+	}
+	if _, err := db.Exec(`INSERT INTO events VALUES (5, ?)`, wallet.EventTypeV2Transaction); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := index.transactionEventCount(chainIndex); err != nil {
+		t.Fatal(err)
+	} else if got != 3 {
+		t.Fatalf("cache returned %d transaction events, want 3", got)
+	}
+	chainIndex.Height++
+	if got, err := index.transactionEventCount(chainIndex); err != nil {
+		t.Fatal(err)
+	} else if got != 4 {
+		t.Fatalf("refreshed count returned %d transaction events, want 4", got)
+	}
+	if got, err := index.addressEventCount(first); err != nil {
+		t.Fatal(err)
+	} else if got != 3 {
+		t.Fatalf("got %d address events, want 3", got)
+	}
+}
+
+func TestPageOffset(t *testing.T) {
+	for _, test := range []struct {
+		offset int
+		limit  int
+		total  int
+		want   int
+	}{
+		{0, 50, 0, 0},
+		{0, 50, 101, 0},
+		{49, 50, 101, 0},
+		{50, 50, 101, 50},
+		{1_000_000, 50, 101, 100},
+	} {
+		if got := pageOffset(test.offset, test.limit, test.total); got != test.want {
+			t.Fatalf("pageOffset(%d, %d, %d): got %d, want %d", test.offset, test.limit, test.total, got, test.want)
+		}
 	}
 }

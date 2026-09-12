@@ -98,11 +98,14 @@ type richBalance struct {
 type richListIndex struct {
 	db *sql.DB
 
-	mu        sync.Mutex
-	index     types.ChainIndex
-	cached    bool
-	addresses int
-	entries   []richBalance
+	mu                     sync.Mutex
+	index                  types.ChainIndex
+	cached                 bool
+	addresses              int
+	entries                []richBalance
+	transactionIndex       types.ChainIndex
+	transactionCount       int
+	transactionCountCached bool
 }
 
 func openRichListIndex(indexPath string) (*richListIndex, error) {
@@ -199,6 +202,44 @@ func (r *richListIndex) top(state consensus.State, index types.ChainIndex) ([]ri
 		r.index, r.cached, r.entries, r.addresses = index, true, entries, addresses
 	}
 	return append([]richBalance(nil), r.entries...), r.addresses, nil
+}
+
+func (r *richListIndex) addressEventCount(address types.Address) (int, error) {
+	var count int
+	err := r.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM event_addresses ea
+		JOIN sia_addresses sa ON sa.id = ea.address_id
+		WHERE sa.sia_address = ?`, address[:]).Scan(&count)
+	return count, err
+}
+
+func (r *richListIndex) transactionEventCount(index types.ChainIndex) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.transactionCountCached && r.transactionIndex == index {
+		return r.transactionCount, nil
+	}
+	var count int
+	err := r.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM events
+		WHERE event_type IN (?, ?)`, wallet.EventTypeV1Transaction, wallet.EventTypeV2Transaction).Scan(&count)
+	if err == nil {
+		r.transactionIndex = index
+		r.transactionCount = count
+		r.transactionCountCached = true
+	}
+	return count, err
+}
+
+func pageOffset(offset, limit, total int) int {
+	if total <= 0 {
+		return 0
+	} else if offset >= total {
+		return (total - 1) / limit * limit
+	}
+	return offset / limit * limit
 }
 
 func (a *app) handler() http.Handler {
@@ -628,9 +669,8 @@ func boolToInt(v bool) int {
 func (a *app) blocks(r *http.Request) (any, error) {
 	limit, offset := queryLimit(r, 20, 100), queryOffset(r)
 	tip := a.cm.Tip()
-	if uint64(offset) > tip.Height {
-		return map[string]any{"blocks": []blockSummary{}, "tip": tip.Height}, nil
-	}
+	total := int(tip.Height + 1)
+	offset = pageOffset(offset, limit, total)
 	start := tip.Height - uint64(offset)
 	blocks := make([]blockSummary, 0, limit)
 	for h := start; len(blocks) < limit; h-- {
@@ -651,7 +691,14 @@ func (a *app) blocks(r *http.Request) (any, error) {
 			break
 		}
 	}
-	return map[string]any{"blocks": blocks, "tip": tip.Height}, nil
+	return map[string]any{
+		"blocks":  blocks,
+		"tip":     tip.Height,
+		"total":   total,
+		"offset":  offset,
+		"limit":   limit,
+		"hasMore": offset+len(blocks) < total,
+	}, nil
 }
 
 func summarizeBlock(block types.Block, state consensus.State) blockSummary {
@@ -863,6 +910,24 @@ func (a *app) recentTransactions(r *http.Request) (any, error) {
 	limit, offset := queryLimit(r, 20, 50), queryOffset(r)
 	cs := a.cm.TipState()
 	unit := cs.QdayUnits(cs.Index.Height)
+	indexed, err := a.wm.Tip()
+	if err != nil {
+		return nil, err
+	}
+	mempool := 0
+	for _, txn := range a.cm.V2PoolTransactions() {
+		kind, _ := transactionKind(txn)
+		if kind == "MINER MARKER" {
+			continue
+		}
+		mempool++
+	}
+	confirmed, err := a.rich.transactionEventCount(indexed)
+	if err != nil {
+		return nil, err
+	}
+	total := confirmed + mempool
+	offset = pageOffset(offset, limit, total)
 	result := make([]txSummary, 0, limit+1)
 	skipped := 0
 	appendResult := func(summary txSummary) bool {
@@ -873,13 +938,11 @@ func (a *app) recentTransactions(r *http.Request) (any, error) {
 		result = append(result, summary)
 		return len(result) > limit
 	}
-	mempool := 0
 	for _, txn := range a.cm.V2PoolTransactions() {
 		kind, _ := transactionKind(txn)
 		if kind == "MINER MARKER" {
 			continue
 		}
-		mempool++
 		if len(result) <= limit {
 			appendResult(summarizeTransaction(txn, nil, time.Time{}, 0, unit, true))
 		}
@@ -948,6 +1011,7 @@ func (a *app) recentTransactions(r *http.Request) (any, error) {
 		"limit":        limit,
 		"hasMore":      hasMore,
 		"mempool":      mempool,
+		"total":        total,
 	}, nil
 }
 
@@ -1280,6 +1344,11 @@ func (a *app) premine(r *http.Request) (any, error) {
 		left = initial.Sub(burned)
 	}
 	limit, offset := queryLimit(r, 50, 100), queryOffset(r)
+	historyTotal, err := a.rich.addressEventCount(addr)
+	if err != nil {
+		return nil, err
+	}
+	offset = pageOffset(offset, limit, historyTotal)
 	history, hasMore, err := a.addressHistory(addr, unit, offset, limit)
 	if err != nil {
 		return nil, err
@@ -1297,6 +1366,7 @@ func (a *app) premine(r *http.Request) (any, error) {
 		"offset":                    offset,
 		"limit":                     limit,
 		"hasMore":                   hasMore,
+		"total":                     historyTotal,
 	}, nil
 }
 
@@ -1347,6 +1417,11 @@ func (a *app) address(r *http.Request) (any, error) {
 	}
 	unit := snapshot.State.QdayUnits(snapshot.State.Index.Height)
 	limit, offset := queryLimit(r, 25, 100), queryOffset(r)
+	historyTotal, err := a.rich.addressEventCount(addr)
+	if err != nil {
+		return nil, err
+	}
+	offset = pageOffset(offset, limit, historyTotal)
 	history, hasMore, err := a.addressHistory(addr, unit, offset, limit)
 	if err != nil {
 		return nil, err
@@ -1365,6 +1440,7 @@ func (a *app) address(r *http.Request) (any, error) {
 		"offset":         offset,
 		"limit":          limit,
 		"hasMore":        hasMore,
+		"total":          historyTotal,
 	}, nil
 }
 
