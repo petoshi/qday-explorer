@@ -491,8 +491,7 @@ async function renderPremine(token) {
     ${breadcrumbs([{label:'Overview',href:'/'},{label:'Premine'}])}
     <section class="premine-hero">
       <div class="premine-hero-copy">
-        <span class="premine-kicker">PUBLIC DEV WALLET</span>
-        <h1>WATCH MY BAG.</h1>
+        <h1>DEV WALLET</h1>
         <p>no trust me bro. the address is public. the balance is live. every coin that moves leaves a scar.</p>
       </div>
       <div class="premine-identity">
