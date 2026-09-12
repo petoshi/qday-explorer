@@ -40,7 +40,7 @@ other API routes return JSON.
 
 | Route | Result |
 | --- | --- |
-| `GET /api/status` | tip, connections, difficulty, hash rate, supply, reward schedule and QDAY state |
+| `GET /api/status` | tip, connections, difficulty, hash rate, supply, reward schedule and PQ Day state |
 | `GET /api/supply` | node-verified issued, burned, current, immature, circulating and maximum supply |
 | `GET /api/circulating-supply` | synchronized circulating supply as plain text for aggregators |
 | `GET /api/total-supply` | synchronized current supply as plain text for aggregators |

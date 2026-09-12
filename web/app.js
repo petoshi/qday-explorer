@@ -120,6 +120,10 @@ function qdayStageLabel(stage) {
   return stage === 'WAITING' ? 'UNBROKEN' : stage;
 }
 
+function transactionKindLabel(kind) {
+  return kind === 'QDAY PROOF' ? 'PQ DAY PROOF' : kind;
+}
+
 function breadcrumbs(items) {
   return `<nav class="breadcrumbs" aria-label="Breadcrumb">${items.map((item, index) => {
     const content = item.href ? `<a class="route-link" href="${e(item.href)}">${e(item.label)}</a>` : `<span>${e(item.label)}</span>`;
@@ -176,7 +180,7 @@ function networkMetric(status) {
   const stateNote = status.qday.stage === 'WAITING' ? 'Canary unbroken' : `Block ${commas(status.qday.height)}`;
   return `<div class="metric network-metric"><span>Network</span><div class="network-values">
     <div class="network-point"><small>Connections</small><strong>${e(commas(status.connections))}</strong><em>${e(commas(status.mempoolTransactions))} in mempool</em></div>
-    <a class="network-point route-link" href="/qday"><small>QDAY state</small><strong>${e(qdayStageLabel(status.qday.stage))}</strong><em>${e(stateNote)}</em></a>
+    <a class="network-point route-link" href="/qday"><small>PQ Day state</small><strong>${e(qdayStageLabel(status.qday.stage))}</strong><em>${e(stateNote)}</em></a>
   </div></div>`;
 }
 
@@ -201,7 +205,7 @@ function blockTable(blocks) {
 
 function transactionTable(transactions) {
   const rows = transactions?.length ? transactions.map(tx => `<tr data-href="/transaction/${e(tx.id)}" tabindex="0">
-    <td><span class="type-badge ${tx.mempool ? 'pending' : tx.kind === 'QDAY PROOF' ? 'qday' : tx.kind === 'BURN' ? 'burn' : ''}">${e(tx.kind)}</span></td>
+    <td><span class="type-badge ${tx.mempool ? 'pending' : tx.kind === 'QDAY PROOF' ? 'qday' : tx.kind === 'BURN' ? 'burn' : ''}">${e(transactionKindLabel(tx.kind))}</span></td>
     <td class="hash-cell"><a class="hash-link route-link" href="/transaction/${e(tx.id)}" title="${e(tx.id)}">${e(tx.id)}</a></td>
     <td>${tx.mempool ? '<span class="status pending">Mempool</span>' : `<a class="primary-link route-link" href="/block/${e(tx.height)}">${commas(tx.height)}</a>`}</td>
     <td title="${e(exactTime(tx.timestamp))}">${e(relativeTime(tx.timestamp))}</td>
@@ -218,7 +222,7 @@ function transactionTable(transactions) {
 
 function eventTable(events) {
   const rows = events?.length ? events.map(event => `<tr data-href="/${e(event.target)}/${e(event.linkID)}" tabindex="0">
-    <td><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : event.kind === 'BURN' ? 'burn' : ''}">${e(event.kind)}</span></td>
+    <td><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : event.kind === 'BURN' ? 'burn' : ''}">${e(transactionKindLabel(event.kind))}</span></td>
     <td class="hash-cell"><a class="hash-link route-link" href="/${e(event.target)}/${e(event.linkID)}" title="${e(event.id)}">${e(event.id)}</a></td>
     <td><a class="primary-link route-link" href="/block/${e(event.height)}">${commas(event.height)}</a></td>
     <td title="${e(exactTime(event.timestamp))}">${e(relativeTime(event.timestamp))}</td>
@@ -351,7 +355,7 @@ async function renderBlock(id, token) {
       ['Parent block', block.height ? `<a class="hash-link route-link" href="/block/${e(block.parentID)}">${e(block.parentID)}</a>` : '—', block.height > 0],
       ['Target', `<code>${e(block.target)}</code>`, true],
       ['Commitment', `<code>${e(block.commitment)}</code>`, true],
-      ['QDAY state', qdayStageLabel(block.qday.stage)]
+      ['PQ Day state', qdayStageLabel(block.qday.stage)]
     ]))}
     ${card('Transactions', transactionTable(block.transactions), `<span class="card-meta">${commas(block.transactions.length)}</span>`)}
     ${blockNavigation}
@@ -370,7 +374,7 @@ async function renderTransaction(id, token) {
     ['Block', blockValue, true],
     ['Timestamp', transaction.mempool ? 'Pending' : exactTime(transaction.timestamp)],
     ['Confirmations', commas(transaction.confirmations)],
-    ['Type', transaction.kind],
+    ['Type', transactionKindLabel(transaction.kind)],
     ['Input total', `${commas(transaction.inputTotal.qday)} QDAY`],
     ['Output total', `${commas(transaction.outputTotal.qday)} QDAY`],
     ['Fee', `${commas(transaction.fee.qday)} QDAY`],
@@ -380,7 +384,7 @@ async function renderTransaction(id, token) {
   paint(token, `
     ${pageHeader('Transaction', transaction.mempool ? 'Unconfirmed' : `${commas(transaction.confirmations)} confirmation${transaction.confirmations === 1 ? '' : 's'}`, [{label:'Overview',href:'/'},{label:'Transactions',href:'/transactions'},{label:short(transaction.id)}], '/transactions', 'Back to transactions')}
     ${identifier('Transaction ID', transaction.id)}
-    ${transaction.qdayProof ? '<div class="notice">This transaction contains a valid QDAY canary proof.</div>' : ''}
+    ${transaction.qdayProof ? '<div class="notice">This transaction contains a valid PQ Day canary proof.</div>' : ''}
     ${card('Overview', detailList(overview))}
     <section class="split-grid">${card('Inputs', ioTable(transaction.inputs), `<span class="card-meta">${commas(transaction.inputs.length)}</span>`)}${card('Outputs', ioTable(transaction.outputs), `<span class="card-meta">${commas(transaction.outputs.length)}</span>`)}</section>
     <nav class="record-navigation"><span></span><a class="route-link" href="/transactions">All transactions</a><span></span></nav>
@@ -421,8 +425,8 @@ async function renderAddress(value, token) {
 
 function qdaySummary(status) {
   const qday = status.qday;
-  if (qday.stage === 'ACTIVE') return `Active since block ${commas(qday.height)}.`;
-  if (qday.stage === 'COUNTDOWN') return `Valid proof confirmed. ${commas(qday.blocksRemaining)} blocks remain before activation.`;
+  if (qday.stage === 'ACTIVE') return `PQ Day began at block ${commas(qday.height)}.`;
+  if (qday.stage === 'COUNTDOWN') return `Valid proof confirmed. ${commas(qday.blocksRemaining)} blocks remain before PQ Day.`;
   if (qday.proofPending) return 'A valid canary proof is currently in the mempool.';
   return 'No valid canary proof is present in the mempool or confirmed chain.';
 }
@@ -432,18 +436,18 @@ async function renderQday(token) {
   if (token !== routeVersion) return;
   statusCache = status;
   updateBar(status);
-  document.title = 'QDAY Status | QDAY Explorer';
+  document.title = 'PQ Day Status | QDAY Explorer';
   const proof = status.qday.proofPending || status.qday.proofTransaction;
   paint(token, `
-    ${pageHeader('QDAY status', qdaySummary(status), [{label:'Overview',href:'/'},{label:'QDAY status'}], '/', 'Overview')}
+    ${pageHeader('PQ Day status', qdaySummary(status), [{label:'Overview',href:'/'},{label:'PQ Day status'}], '/', 'Overview')}
     <section class="state-card"><div><span>Consensus state</span><strong>${e(qdayStageLabel(status.qday.stage))}</strong></div><div><span>Accepted proofs</span><strong>${commas(status.qday.acceptedProofs)}</strong></div><div><span>Mempool proof</span><strong>${status.qday.proofPending ? 'YES' : 'NO'}</strong></div></section>
     ${identifier('Fixed Edwards25519 canary', status.qday.canary)}
     ${card('Consensus parameters', detailList([
       ['Challenge', status.qday.challenge],
       ['Witness format', status.qday.witness],
       ['Proof fee', `${commas(status.qday.proofFee.qday)} QDAY`],
-      ['Activation delay', `${commas(status.qday.activationDelay)} blocks`],
-      ['Activation height', status.qday.height ? commas(status.qday.height) : 'Not set'],
+      ['PQ Day fuse', `${commas(status.qday.activationDelay)} blocks`],
+      ['PQ Day height', status.qday.height ? commas(status.qday.height) : 'Not set'],
       ['Denomination multiplier', `×${commas(status.qday.denominationMultiplier)}`],
       ['Shield period', `${commas(status.qday.shieldBlocks)} blocks`],
       ['Decay period', `${commas(status.qday.decayBlocks)} blocks`],
