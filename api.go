@@ -1230,13 +1230,7 @@ func (a *app) addressHistory(addr types.Address, unit types.Currency, offset, li
 	}
 	history := make([]map[string]any, 0, len(events))
 	for _, event := range events {
-		inflow, outflow := event.SiacoinInflow(), event.SiacoinOutflow()
-		direction, value := "IN", inflow
-		if outflow.Cmp(inflow) > 0 {
-			direction, value = "OUT", outflow.Sub(inflow)
-		} else {
-			value = inflow.Sub(outflow)
-		}
+		direction, value, fee := addressEventFlow(event)
 		kind, target, linkID := strings.ToUpper(event.Type), "transaction", event.ID.String()
 		if event.Type == wallet.EventTypeMinerPayout {
 			kind, target, linkID = "MINER REWARD", "block", event.Index.ID.String()
@@ -1255,9 +1249,31 @@ func (a *app) addressHistory(addr types.Address, unit types.Currency, offset, li
 			"confirmations": event.Confirmations,
 			"direction":     direction,
 			"value":         asAmount(value, unit),
+			"fee":           asAmount(fee, unit),
 		})
 	}
 	return history, hasMore, nil
+}
+
+func addressEventFlow(event wallet.Event) (direction string, value, fee types.Currency) {
+	inflow, outflow := event.SiacoinInflow(), event.SiacoinOutflow()
+	direction, value = "IN", inflow
+	if outflow.Cmp(inflow) > 0 {
+		direction, value = "OUT", outflow.Sub(inflow)
+	} else {
+		value = inflow.Sub(outflow)
+	}
+
+	switch data := event.Data.(type) {
+	case wallet.EventV1Transaction:
+		fee = data.Transaction.TotalFees()
+	case wallet.EventV2Transaction:
+		fee = types.V2Transaction(data).MinerFee
+	}
+	if direction == "OUT" && value.Cmp(fee) >= 0 {
+		value = value.Sub(fee)
+	}
+	return
 }
 
 func explicitBurnFromAddress(txn types.V2Transaction, addr types.Address) types.Currency {

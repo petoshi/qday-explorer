@@ -245,15 +245,16 @@ function transactionTable(transactions) {
 
 function eventTable(events) {
   const rows = events?.length ? events.map(event => `<tr data-href="/${e(event.target)}/${e(event.linkID)}" tabindex="0">
-    <td><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : event.kind === 'BURN' ? 'burn' : ''}">${e(transactionKindLabel(event.kind))}</span></td>
-    <td class="hash-cell"><a class="hash-link route-link" href="/${e(event.target)}/${e(event.linkID)}" title="${e(event.id)}">${e(event.id)}</a></td>
-    <td><a class="primary-link route-link" href="/block/${e(event.height)}">${commas(event.height)}</a></td>
-    <td title="${e(exactTime(event.timestamp))}">${e(relativeTime(event.timestamp))}</td>
-    <td><span class="direction ${event.direction.toLowerCase()}">${e(event.direction)}</span></td>
-    <td class="numeric">${amount(event.value)}</td>
-  </tr>`).join('') : tableEmpty(6, 'No address history found.');
+    <td class="event-type"><span class="type-badge ${event.kind === 'QDAY PROOF' ? 'qday' : event.kind === 'BURN' ? 'burn' : ''}">${e(transactionKindLabel(event.kind))}</span></td>
+    <td class="hash-cell event-id"><a class="hash-link route-link" href="/${e(event.target)}/${e(event.linkID)}" title="${e(event.id)}">${e(event.id)}</a></td>
+    <td class="event-block" data-label="Block"><a class="primary-link route-link" href="/block/${e(event.height)}">${commas(event.height)}</a></td>
+    <td class="event-age" data-label="Age" title="${e(exactTime(event.timestamp))}">${e(relativeTime(event.timestamp))}</td>
+    <td class="event-direction"><span class="direction ${event.direction.toLowerCase()}">${e(event.direction)}</span></td>
+    <td class="numeric event-value" data-label="Value">${amount(event.value)}</td>
+    <td class="numeric event-fee" data-label="Fee">${amount(event.fee)}</td>
+  </tr>`).join('') : tableEmpty(7, 'No address history found.');
   return `<div class="table-scroll"><table class="data-table events-table">
-    <thead><tr><th>Type</th><th>Event ID</th><th>Block</th><th>Age</th><th>Direction</th><th class="numeric">Amount</th></tr></thead>
+    <thead><tr><th>Type</th><th>Event ID</th><th>Block</th><th>Age</th><th>Direction</th><th class="numeric">Value</th><th class="numeric">Fee</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
 }

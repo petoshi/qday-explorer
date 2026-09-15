@@ -151,6 +151,65 @@ func TestExplicitBurnFromAddress(t *testing.T) {
 	}
 }
 
+func TestAddressEventFlowSeparatesValueAndFee(t *testing.T) {
+	var source, destination types.Address
+	source[0], destination[0] = 1, 2
+	value := types.HastingsPerSiacoin.Div64(1000)
+	fee := types.Siacoins(240)
+	input := types.Siacoins(300)
+	txn := types.V2Transaction{
+		SiacoinInputs: []types.V2SiacoinInput{{
+			Parent: types.SiacoinElement{SiacoinOutput: types.SiacoinOutput{
+				Address: source,
+				Value:   input,
+			}},
+		}},
+		SiacoinOutputs: []types.SiacoinOutput{
+			{Address: destination, Value: value},
+			{Address: source, Value: input.Sub(value).Sub(fee)},
+		},
+		MinerFee: fee,
+	}
+	event := wallet.Event{
+		Type:     wallet.EventTypeV2Transaction,
+		Data:     wallet.EventV2Transaction(txn),
+		Relevant: []types.Address{source},
+	}
+	direction, gotValue, gotFee := addressEventFlow(event)
+	if direction != "OUT" || gotValue != value || gotFee != fee {
+		t.Fatalf("got %s, value %v, fee %v; want OUT, value %v, fee %v", direction, gotValue, gotFee, value, fee)
+	}
+
+	event.Relevant = []types.Address{destination}
+	direction, gotValue, gotFee = addressEventFlow(event)
+	if direction != "IN" || gotValue != value || gotFee != fee {
+		t.Fatalf("got %s, value %v, fee %v; want IN, value %v, fee %v", direction, gotValue, gotFee, value, fee)
+	}
+
+	burnValue := types.Siacoins(36_450)
+	burnFee := types.HastingsPerSiacoin.Div64(1000)
+	input = types.Siacoins(40_000)
+	txn = types.V2Transaction{
+		SiacoinInputs: []types.V2SiacoinInput{{
+			Parent: types.SiacoinElement{SiacoinOutput: types.SiacoinOutput{
+				Address: source,
+				Value:   input,
+			}},
+		}},
+		SiacoinOutputs: []types.SiacoinOutput{
+			{Address: types.VoidAddress, Value: burnValue},
+			{Address: source, Value: input.Sub(burnValue).Sub(burnFee)},
+		},
+		MinerFee: burnFee,
+	}
+	event.Data = wallet.EventV2Transaction(txn)
+	event.Relevant = []types.Address{source}
+	direction, gotValue, gotFee = addressEventFlow(event)
+	if direction != "OUT" || gotValue != burnValue || gotFee != burnFee {
+		t.Fatalf("got %s, value %v, fee %v; want OUT, value %v, fee %v", direction, gotValue, gotFee, burnValue, burnFee)
+	}
+}
+
 func TestQueryRichBalances(t *testing.T) {
 	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
