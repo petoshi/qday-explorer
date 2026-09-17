@@ -4,6 +4,11 @@ Live: [explorer.pqday.com](https://explorer.pqday.com)
 
 Explorer and read-only API for QDAY mainnet blocks, transactions, addresses and consensus status.
 
+The checked-in QDAY submodule contains the consensus implementation used by
+the indexer. Current mainnet deployments must include QDAY v1.0.0 or newer to
+validate block 9,100 and everything after it. Clone with submodules and do not
+replace that source with an upstream Sia module.
+
 ## Run it
 
 You need Go 1.26, a C compiler for SQLite and the QDAY mainnet manifest.
