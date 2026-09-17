@@ -365,6 +365,18 @@ footer { display: flex; align-items: center; justify-content: space-between; gap
 .toast { position: fixed; bottom: 24px; left: 50%; z-index: 50; padding: 10px 15px; border: 1px solid #474951; border-radius: 3px; background: #23242a; color: #fff; font-size: 11px; font-weight: 700; opacity: 0; pointer-events: none; transform: translate(-50%, 12px); transition: .18s ease; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+body.upgrade-notice-open { overflow: hidden; }
+.upgrade-notice { position: fixed; z-index: 120; inset: 0; display: grid; padding: 20px; place-items: center; background: rgba(8, 9, 12, .84); backdrop-filter: blur(11px); }
+.upgrade-notice[hidden] { display: none; }
+.upgrade-notice-card { position: relative; width: min(590px, 100%); padding: clamp(30px, 6vw, 58px); border: 1px solid #674f3f; background: linear-gradient(145deg, #1b1b20, #101115 72%); box-shadow: 0 35px 90px rgba(0,0,0,.62), inset 4px 0 0 var(--accent); }
+.upgrade-notice-close { position: absolute; top: 14px; right: 14px; width: 43px; height: 43px; border: 1px solid #3d3e46; border-radius: 3px; background: transparent; color: #9b9aa3; font-size: 25px; line-height: 1; cursor: pointer; }
+.upgrade-notice-close:hover { border-color: var(--accent); color: #fff; }
+.upgrade-notice-kicker { color: #df9a78; font: 800 10px/1 var(--mono); letter-spacing: .16em; }
+.upgrade-notice-card h2 { max-width: 500px; margin: 16px 0 14px; color: #f5efe7; font: 800 clamp(44px, 9vw, 72px)/.88 Barlow, sans-serif; letter-spacing: -.015em; }
+.upgrade-notice-card p { max-width: 470px; margin: 0 0 27px; color: #aaa8af; font-size: 14px; line-height: 1.65; }
+.upgrade-notice-card a { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 14px; padding: 10px 15px; border: 1px solid var(--accent); border-radius: 3px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .07em; }
+.upgrade-notice-card a:hover { background: #f07855; }
+
 @media (max-width: 1160px) {
   .brand { margin-right: 22px; }
   .brand strong, .brand span { display: none; }
