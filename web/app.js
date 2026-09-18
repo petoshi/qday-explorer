@@ -570,7 +570,7 @@ async function renderPremine(token) {
     </section>
     <section class="premine-stats" aria-label="Premine balances">
       ${premineStat('Premine', data.premine)}
-      ${premineStat('Burned', data.burnedFromPremine, 'burned')}
+      ${premineStat('Burned from premine', data.burnedFromPremine, 'burned')}
       ${premineStat('Left from premine', data.leftFromPremine, 'left')}
       ${premineStat('Dev wallet balance', data.devWalletBalance, 'wallet', `/address/${data.address}`)}
     </section>
