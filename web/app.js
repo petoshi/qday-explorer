@@ -78,6 +78,20 @@ function amount(value) {
   return `${commas(value?.qday || '0')} <span class="unit">QDAY</span>`;
 }
 
+function roundedAmount(value, places = 3) {
+  const raw = String(value?.qday || '0');
+  const match = raw.match(/^(\d+)(?:\.(\d+))?$/);
+  if (!match) return amount(value);
+  const fraction = match[2] || '';
+  if (fraction.length <= places) return amount(value);
+  const scale = 10n ** BigInt(places);
+  let scaled = BigInt(match[1]) * scale + BigInt(fraction.slice(0, places).padEnd(places, '0'));
+  if (fraction[places] >= '5') scaled += 1n;
+  const whole = scaled / scale;
+  const roundedFraction = String(scaled % scale).padStart(places, '0').replace(/0+$/, '');
+  return `${commas(`${whole}${roundedFraction ? `.${roundedFraction}` : ''}`)} <span class="unit">QDAY</span>`;
+}
+
 function compactCoins(value) {
   const number = Number(value ?? 0);
   if (!Number.isFinite(number)) return commas(value);
@@ -294,7 +308,7 @@ function richListTable(entries, supply) {
   const rows = entries?.length ? entries.map(entry => `<tr data-href="/address/${e(entry.address)}" tabindex="0">
     <td><span class="rank-number">${commas(entry.rank)}</span></td>
     <td class="address-cell rich-address"><a class="hash-link route-link" href="/address/${e(entry.address)}" title="${e(entry.address)}">${e(entry.address)}</a></td>
-    <td class="numeric rich-balance">${amount(entry.balance)}</td>
+    <td class="numeric rich-balance">${roundedAmount(entry.balance)}</td>
     <td class="numeric rich-share">${e(shareOfSupply(entry.balance, supply))}</td>
   </tr>`).join('') : tableEmpty(4, 'No funded addresses found.');
   return `<div class="table-scroll"><table class="data-table rich-list-table">
