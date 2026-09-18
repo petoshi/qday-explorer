@@ -74,22 +74,26 @@ function copyButton(value) {
   return `<button class="copy-button" type="button" data-copy="${e(value)}">Copy</button>`;
 }
 
-function amount(value) {
-  return `${commas(value?.qday || '0')} <span class="unit">QDAY</span>`;
-}
-
-function roundedAmount(value, places = 3) {
-  const raw = String(value?.qday || '0');
+function roundedCoins(value, places = 4) {
+  const raw = String(value ?? '0');
   const match = raw.match(/^(\d+)(?:\.(\d+))?$/);
-  if (!match) return amount(value);
+  if (!match) return commas(raw);
   const fraction = match[2] || '';
-  if (fraction.length <= places) return amount(value);
+  if (fraction.length <= places) {
+    const trimmed = fraction.replace(/0+$/, '');
+    return commas(`${match[1]}${trimmed ? `.${trimmed}` : ''}`);
+  }
   const scale = 10n ** BigInt(places);
   let scaled = BigInt(match[1]) * scale + BigInt(fraction.slice(0, places).padEnd(places, '0'));
   if (fraction[places] >= '5') scaled += 1n;
+  if (scaled === 0n && (BigInt(match[1]) !== 0n || /[1-9]/.test(fraction))) return `<0.${'0'.repeat(places - 1)}1`;
   const whole = scaled / scale;
   const roundedFraction = String(scaled % scale).padStart(places, '0').replace(/0+$/, '');
-  return `${commas(`${whole}${roundedFraction ? `.${roundedFraction}` : ''}`)} <span class="unit">QDAY</span>`;
+  return commas(`${whole}${roundedFraction ? `.${roundedFraction}` : ''}`);
+}
+
+function amount(value) {
+  return `${e(roundedCoins(value?.qday || '0'))} <span class="unit">QDAY</span>`;
 }
 
 function compactCoins(value) {
@@ -220,7 +224,7 @@ function supplyMetric(status) {
     ['Current supply', status.currentSupply, 'current', true]
   ];
   return `<div class="overview-panel supply-metric" aria-label="Supply metrics"><div class="supply-values">${values.map(([label, value, style, showUnit]) => `
-    <div class="supply-point ${style}" title="${e(commas(value.qday))} QDAY">
+    <div class="supply-point ${style}" title="${e(roundedCoins(value.qday))} QDAY">
       <small>${e(label)}</small><strong>${e(compactCoins(value.qday))}${showUnit ? ' QDAY' : ''}</strong>
     </div>`).join('')}</div></div>`;
 }
@@ -229,8 +233,8 @@ function emissionMetric(status) {
   const total = Number(status.rewardBlocksTotal || 0);
   const remaining = Number(status.rewardBlocksRemaining || 0);
   return `<div class="overview-panel emission-metric" aria-label="Emission metrics"><div class="emission-values">
-    <div class="emission-point" title="Maximum issued supply: ${e(commas(status.maximumIssuedSupply.qday))} QDAY. Confirmed burns do not change the issuance cap."><small>Max supply</small><strong>${e(compactCoins(status.maximumIssuedSupply.qday))}</strong></div>
-    <div class="emission-point" title="Current base reward: ${e(commas(status.blockReward.qday))} QDAY"><small>Block reward</small><strong>${e(compactCoins(status.blockReward.qday))}</strong></div>
+    <div class="emission-point" title="Maximum issued supply: ${e(roundedCoins(status.maximumIssuedSupply.qday))} QDAY. Confirmed burns do not change the issuance cap."><small>Max supply</small><strong>${e(compactCoins(status.maximumIssuedSupply.qday))}</strong></div>
+    <div class="emission-point" title="Current base reward: ${e(roundedCoins(status.blockReward.qday))} QDAY"><small>Block reward</small><strong>${e(compactCoins(status.blockReward.qday))}</strong></div>
     <div class="emission-point" title="${e(commas(remaining))} reward blocks remain out of ${e(commas(total))}. Rewards end after block ${e(commas(total))}."><small>Reward blocks left</small><strong>${e(compactCoins(remaining))}</strong></div>
   </div></div>`;
 }
@@ -308,7 +312,7 @@ function richListTable(entries, supply) {
   const rows = entries?.length ? entries.map(entry => `<tr data-href="/address/${e(entry.address)}" tabindex="0">
     <td><span class="rank-number">${commas(entry.rank)}</span></td>
     <td class="address-cell rich-address"><a class="hash-link route-link" href="/address/${e(entry.address)}" title="${e(entry.address)}">${e(entry.address)}</a></td>
-    <td class="numeric rich-balance">${roundedAmount(entry.balance)}</td>
+    <td class="numeric rich-balance">${amount(entry.balance)}</td>
     <td class="numeric rich-share">${e(shareOfSupply(entry.balance, supply))}</td>
   </tr>`).join('') : tableEmpty(4, 'No funded addresses found.');
   return `<div class="table-scroll"><table class="data-table rich-list-table">
@@ -452,9 +456,9 @@ async function renderBlock(id, token) {
       ['Timestamp', exactTime(block.timestamp)],
       ['Confirmations', commas(block.confirmations)],
       ['Miner', block.miner ? `<a class="hash-link route-link" href="/address/${e(block.miner)}">${e(block.miner)}</a>` : 'Genesis', Boolean(block.miner)],
-      ['Reward', `${commas(block.reward.qday)} QDAY`],
-      ['Base reward', `${commas(block.baseReward.qday)} QDAY`],
-      ['Fees', `${commas(block.fees.qday)} QDAY`],
+      ['Reward', `${roundedCoins(block.reward.qday)} QDAY`],
+      ['Base reward', `${roundedCoins(block.baseReward.qday)} QDAY`],
+      ['Fees', `${roundedCoins(block.fees.qday)} QDAY`],
       ['Transactions', commas(block.transactions.length)],
       ['Miner markers', commas(block.minerMarkerCount)],
       ['Difficulty', commas(block.difficulty)],
@@ -482,12 +486,12 @@ async function renderTransaction(id, token) {
     ['Timestamp', transaction.mempool ? 'Pending' : exactTime(transaction.timestamp)],
     ['Confirmations', commas(transaction.confirmations)],
     ['Type', transactionKindLabel(transaction.kind)],
-    ['Input total', `${commas(transaction.inputTotal.qday)} QDAY`],
-    ['Output total', `${commas(transaction.outputTotal.qday)} QDAY`],
-    ['Fee', `${commas(transaction.fee.qday)} QDAY`],
+    ['Input total', `${roundedCoins(transaction.inputTotal.qday)} QDAY`],
+    ['Output total', `${roundedCoins(transaction.outputTotal.qday)} QDAY`],
+    ['Fee', `${roundedCoins(transaction.fee.qday)} QDAY`],
     ['DEFEND nonce', transaction.defendNonce]
   ];
-  if (transaction.burned?.atomic !== '0') overview.splice(7, 0, ['Burned', `${commas(transaction.burned.qday)} QDAY`]);
+  if (transaction.burned?.atomic !== '0') overview.splice(7, 0, ['Burned', `${roundedCoins(transaction.burned.qday)} QDAY`]);
   paint(token, `
     ${pageHeader('Transaction', transaction.mempool ? 'Unconfirmed' : `${commas(transaction.confirmations)} confirmation${transaction.confirmations === 1 ? '' : 's'}`, [{label:'Overview',href:'/'},{label:'Transactions',href:'/transactions'},{label:short(transaction.id)}], '/transactions', 'Back to transactions')}
     ${identifier('Transaction ID', transaction.id)}
@@ -515,8 +519,8 @@ async function renderAddress(value, token) {
     ${pageHeader('Address', `Indexed at block ${commas(data.indexedHeight)}`, [{label:'Overview',href:'/'},{label:'Address'},{label:short(data.address)}], '/', 'Overview')}
     ${identifier('QDAY address', data.address)}
     <section class="metrics-grid address-metrics">
-      ${metric('Spendable balance', `${commas(data.balance.qday)} QDAY`)}
-      ${metric('Immature balance', `${commas(data.immature.qday)} QDAY`)}
+      ${metric('Spendable balance', `${roundedCoins(data.balance.qday)} QDAY`)}
+      ${metric('Immature balance', `${roundedCoins(data.immature.qday)} QDAY`)}
       ${metric('Unspent outputs', commas(data.liveOutputs))}
       ${metric('Shielded outputs', commas(data.shielded))}
       ${metric('Decaying outputs', commas(data.decaying))}
@@ -616,7 +620,7 @@ async function renderQday(token) {
     ${card('Consensus parameters', detailList([
       ['Challenge', status.qday.challenge],
       ['Witness format', status.qday.witness],
-      ['Proof fee', `${commas(status.qday.proofFee.qday)} QDAY`],
+      ['Proof fee', `${roundedCoins(status.qday.proofFee.qday)} QDAY`],
       ['PQ Day fuse', `${commas(status.qday.activationDelay)} blocks`],
       ['PQ Day height', status.qday.height ? commas(status.qday.height) : 'Not set'],
       ['Denomination multiplier', `×${commas(status.qday.denominationMultiplier)}`],
