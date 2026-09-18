@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -105,6 +106,7 @@ func TestTransactionKind(t *testing.T) {
 	}{
 		{consensus.QdayTransfer, "TRANSFER"},
 		{consensus.QdayCoinbase, "MINER MARKER"},
+		{consensus.QdayMiningWork, "MINING WORK"},
 		{consensus.QdayCanaryProof, "QDAY PROOF"},
 	} {
 		txn := types.V2Transaction{ArbitraryData: (consensus.QdayEnvelope{Kind: test.kind}).Encode()}
@@ -122,6 +124,20 @@ func TestTransactionKind(t *testing.T) {
 	summary := summarizeTransaction(txn, nil, time.Time{}, 0, types.HastingsPerSiacoin, true)
 	if summary.Kind != "BURN" || summary.To != "BURN" || summary.Value.QDAY != "10" {
 		t.Fatalf("wrong burn summary: %+v", summary)
+	}
+	block := types.Block{Transactions: []types.Transaction{{}}, V2: &types.V2BlockData{Transactions: []types.V2Transaction{
+		{ArbitraryData: (consensus.QdayEnvelope{Kind: consensus.QdayCoinbase}).Encode()},
+		{ArbitraryData: (consensus.QdayEnvelope{Kind: consensus.QdayMiningWork}).Encode()},
+		{ArbitraryData: (consensus.QdayEnvelope{Kind: consensus.QdayTransfer}).Encode()},
+	}}}
+	if got := blockUserTransactionCount(block); got != 2 {
+		t.Fatalf("counted %d user transactions, want 2", got)
+	}
+}
+
+func TestPrettyHashrateValue(t *testing.T) {
+	if got := prettyHashrateValue(big.NewInt(1_320_000_000_000), 1); got != "1.32 TH/s" {
+		t.Fatalf("got %q", got)
 	}
 }
 

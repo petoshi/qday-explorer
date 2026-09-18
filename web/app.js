@@ -194,7 +194,7 @@ function chainMetric(status) {
 
 function proofOfWorkMetric(status) {
   return `<div class="overview-panel pow-metric" aria-label="Proof of work metrics"><div class="overview-values">
-    ${overviewPoint('Network hashrate', status.estimatedHashrate, 'BLAKE2b-256 estimate')}
+    ${overviewPoint('Network hashrate', status.observedHashrate || status.estimatedHashrate, status.observedHashrate ? `${commas(status.hashrateWindowBlocks)} blocks observed · target rate ${status.estimatedHashrate}` : 'BLAKE2b-256 target rate')}
     ${overviewPoint('Difficulty', compactWork(status.difficulty), `${commas(status.difficulty)} expected hashes`, '', `Target ${status.target}`)}
   </div></div>`;
 }

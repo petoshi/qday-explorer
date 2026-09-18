@@ -527,11 +527,11 @@ func asAmount(v, unit types.Currency) amount {
 	return amount{QDAY: formatAmount(v, unit), Atomic: v.ExactString()}
 }
 
-func prettyHashrate(difficulty consensus.Work, seconds int64) string {
-	v, ok := new(big.Int).SetString(difficulty.String(), 10)
-	if !ok || seconds < 1 {
+func prettyHashrateValue(work *big.Int, seconds int64) string {
+	if work == nil || work.Sign() < 0 || seconds < 1 {
 		return "0 H/s"
 	}
+	v := new(big.Int).Set(work)
 	v.Div(v, big.NewInt(seconds))
 	units := []string{"H/s", "kH/s", "MH/s", "GH/s", "TH/s", "PH/s", "EH/s", "ZH/s", "YH/s"}
 	divisor := big.NewInt(1)
@@ -553,6 +553,44 @@ func prettyHashrate(difficulty consensus.Work, seconds int64) string {
 	return fmt.Sprintf("%s.%02d %s", whole.String(), frac.Int64(), units[unit])
 }
 
+func prettyHashrate(difficulty consensus.Work, seconds int64) string {
+	v, ok := new(big.Int).SetString(difficulty.String(), 10)
+	if !ok {
+		return "0 H/s"
+	}
+	return prettyHashrateValue(v, seconds)
+}
+
+func (a *app) observedHashrate(tip types.ChainIndex, state consensus.State, window uint64) (string, uint64) {
+	if tip.Height == 0 || window == 0 {
+		return "", 0
+	}
+	window = min(window, tip.Height)
+	startIndex, ok := a.cm.BestIndex(tip.Height - window)
+	if !ok {
+		return "", 0
+	}
+	startState, ok := a.cm.State(startIndex.ID)
+	if !ok {
+		return "", 0
+	}
+	startBlock, ok := a.cm.Block(startIndex.ID)
+	if !ok {
+		return "", 0
+	}
+	endBlock, ok := a.cm.Block(tip.ID)
+	if !ok {
+		return "", 0
+	}
+	seconds := endBlock.Timestamp.Unix() - startBlock.Timestamp.Unix()
+	endWork, endOK := new(big.Int).SetString(state.TotalWork.String(), 10)
+	startWork, startOK := new(big.Int).SetString(startState.TotalWork.String(), 10)
+	if !endOK || !startOK || seconds < 1 || endWork.Cmp(startWork) <= 0 {
+		return "", 0
+	}
+	return prettyHashrateValue(endWork.Sub(endWork, startWork), seconds), window
+}
+
 func qdayStage(cs consensus.State) (stage string, remaining uint64) {
 	if cs.QdayActive(cs.Index.Height) {
 		return "ACTIVE", 0
@@ -566,8 +604,9 @@ func qdayStage(cs consensus.State) (stage string, remaining uint64) {
 }
 
 func (a *app) status(r *http.Request) (any, error) {
-	tip := a.cm.Tip()
 	cs := a.cm.TipState()
+	tip := cs.Index
+	observedHashrate, hashrateWindow := a.observedHashrate(tip, cs, 120)
 	indexed, err := a.wm.Tip()
 	if err != nil {
 		return nil, err
@@ -620,6 +659,8 @@ func (a *app) status(r *http.Request) (any, error) {
 		"difficulty":            cs.Difficulty.String(),
 		"target":                cs.PoWTarget().String(),
 		"estimatedHashrate":     prettyHashrate(cs.Difficulty, int64(a.manifest.Network.BlockInterval/time.Second)),
+		"observedHashrate":      observedHashrate,
+		"hashrateWindowBlocks":  hashrateWindow,
 		"blockIntervalSeconds":  int64(a.manifest.Network.BlockInterval / time.Second),
 		"blockReward":           asAmount(cs.BlockReward(), unit),
 		"rewardedBlocks":        rewardedBlocks,
@@ -712,7 +753,7 @@ func summarizeBlock(block types.Block, state consensus.State) blockSummary {
 	}
 	userTransactions := len(block.Transactions)
 	for _, txn := range block.V2Transactions() {
-		if kind, _ := transactionKind(txn); kind != "MINER MARKER" {
+		if kind, _ := transactionKind(txn); !protocolTransaction(kind) {
 			userTransactions++
 		}
 	}
@@ -794,12 +835,15 @@ func (a *app) block(r *http.Request) (any, error) {
 			Fee:           asAmount(types.ZeroCurrency, unit),
 		})
 	}
-	markerCount := 0
+	markerCount, miningWorkCount := 0, 0
 	for _, txn := range block.V2Transactions() {
 		fees = fees.Add(txn.MinerFee)
 		summary := summarizeTransaction(txn, &state.Index.Height, block.Timestamp, a.cm.Tip().Height-state.Index.Height+1, unit, false)
 		if summary.Kind == "MINER MARKER" {
 			markerCount++
+			continue
+		} else if summary.Kind == "MINING WORK" {
+			miningWorkCount++
 			continue
 		}
 		txns = append(txns, summary)
@@ -821,6 +865,7 @@ func (a *app) block(r *http.Request) (any, error) {
 		"fees":             asAmount(fees, unit),
 		"transactions":     txns,
 		"minerMarkerCount": markerCount,
+		"miningWorkCount":  miningWorkCount,
 		"qday": map[string]any{
 			"stage":           stage,
 			"height":          state.QdayHeight,
@@ -844,11 +889,17 @@ func transactionKind(txn types.V2Transaction) (string, consensus.QdayEnvelope) {
 		return "TRANSFER", env
 	case consensus.QdayCoinbase:
 		return "MINER MARKER", env
+	case consensus.QdayMiningWork:
+		return "MINING WORK", env
 	case consensus.QdayCanaryProof:
 		return "QDAY PROOF", env
 	default:
 		return "UNKNOWN", env
 	}
+}
+
+func protocolTransaction(kind string) bool {
+	return kind == "MINER MARKER" || kind == "MINING WORK"
 }
 
 func summarizeTransaction(txn types.V2Transaction, height *uint64, timestamp time.Time, confirmations uint64, unit types.Currency, mempool bool) txSummary {
@@ -906,23 +957,66 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+func blockUserTransactionCount(block types.Block) int {
+	count := len(block.Transactions)
+	for _, txn := range block.V2Transactions() {
+		kind, _ := transactionKind(txn)
+		if !protocolTransaction(kind) {
+			count++
+		}
+	}
+	return count
+}
+
+func (a *app) userTransactionCount(ctx context.Context, tip types.ChainIndex) (int, error) {
+	a.transactionMu.Lock()
+	defer a.transactionMu.Unlock()
+
+	start, count := uint64(0), 0
+	if a.transactionCached && tip.Height >= a.transactionIndex.Height {
+		if index, ok := a.cm.BestIndex(a.transactionIndex.Height); ok && index == a.transactionIndex {
+			if tip == a.transactionIndex {
+				return a.transactionCount, nil
+			}
+			start, count = a.transactionIndex.Height+1, a.transactionCount
+		}
+	}
+	for height := start; height <= tip.Height; height++ {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		default:
+		}
+		index, ok := a.cm.BestIndex(height)
+		if !ok {
+			return 0, errors.New("transaction index is missing a best chain block")
+		}
+		block, ok := a.cm.Block(index.ID)
+		if !ok {
+			return 0, errors.New("transaction index is missing block data")
+		}
+		count += blockUserTransactionCount(block)
+	}
+	a.transactionIndex = tip
+	a.transactionCount = count
+	a.transactionCached = true
+	return count, nil
+}
+
 func (a *app) recentTransactions(r *http.Request) (any, error) {
 	limit, offset := queryLimit(r, 20, 50), queryOffset(r)
 	cs := a.cm.TipState()
 	unit := cs.QdayUnits(cs.Index.Height)
-	indexed, err := a.wm.Tip()
-	if err != nil {
-		return nil, err
-	}
 	mempool := 0
 	for _, txn := range a.cm.V2PoolTransactions() {
 		kind, _ := transactionKind(txn)
-		if kind == "MINER MARKER" {
+		if protocolTransaction(kind) {
 			continue
 		}
 		mempool++
 	}
-	confirmed, err := a.rich.transactionEventCount(indexed)
+	tip := a.cm.Tip()
+	confirmed, err := a.userTransactionCount(r.Context(), tip)
 	if err != nil {
 		return nil, err
 	}
@@ -940,14 +1034,13 @@ func (a *app) recentTransactions(r *http.Request) (any, error) {
 	}
 	for _, txn := range a.cm.V2PoolTransactions() {
 		kind, _ := transactionKind(txn)
-		if kind == "MINER MARKER" {
+		if protocolTransaction(kind) {
 			continue
 		}
 		if len(result) <= limit {
 			appendResult(summarizeTransaction(txn, nil, time.Time{}, 0, unit, true))
 		}
 	}
-	tip := a.cm.Tip()
 	for h := tip.Height; len(result) <= limit; h-- {
 		select {
 		case <-r.Context().Done():
@@ -970,7 +1063,7 @@ func (a *app) recentTransactions(r *http.Request) (any, error) {
 		for i := len(block.V2Transactions()) - 1; i >= 0 && len(result) <= limit; i-- {
 			txn := block.V2Transactions()[i]
 			kind, _ := transactionKind(txn)
-			if kind != "MINER MARKER" {
+			if !protocolTransaction(kind) {
 				height := h
 				appendResult(summarizeTransaction(txn, &height, block.Timestamp, tip.Height-h+1, unit, false))
 			}

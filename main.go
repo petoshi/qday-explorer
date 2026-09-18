@@ -16,11 +16,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"go.sia.tech/core/gateway"
+	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils"
 	"go.sia.tech/coreutils/chain"
 	"go.sia.tech/coreutils/syncer"
@@ -49,6 +51,11 @@ type app struct {
 	nodeConnections atomic.Int64
 	apiLimiter      *apiRateLimiter
 	rich            *richListIndex
+
+	transactionMu     sync.Mutex
+	transactionIndex  types.ChainIndex
+	transactionCount  int
+	transactionCached bool
 }
 
 func loadManifest(path string) (m chain.QdayManifest, err error) {
