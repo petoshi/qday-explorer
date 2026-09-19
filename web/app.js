@@ -1,33 +1,11 @@
 const root = document.querySelector('#app');
 const toast = document.querySelector('#toast');
-const upgradeNotice = document.querySelector('#upgrade-notice');
-const upgradeDismiss = document.querySelector('[data-dismiss-upgrade]');
-const upgradeStorageKey = 'qday:v1.0.0-upgrade-dismissed';
 
 let statusCache = null;
 let renderedFingerprint = '';
 let routeVersion = 0;
 let refreshRunning = false;
 let toastTimer;
-
-function upgradeDismissed() {
-  try { return localStorage.getItem(upgradeStorageKey) === '1'; }
-  catch { return false; }
-}
-
-function dismissUpgradeNotice() {
-  try { localStorage.setItem(upgradeStorageKey, '1'); }
-  catch (_) { }
-  upgradeNotice.hidden = true;
-  document.body.classList.remove('upgrade-notice-open');
-}
-
-upgradeDismiss.addEventListener('click', dismissUpgradeNotice);
-if (!upgradeDismissed()) {
-  upgradeNotice.hidden = false;
-  document.body.classList.add('upgrade-notice-open');
-  requestAnimationFrame(() => upgradeDismiss.focus({preventScroll:true}));
-}
 
 const e = value => String(value ?? '').replace(/[&<>'"]/g, character => ({
   '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;'
