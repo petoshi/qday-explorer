@@ -606,7 +606,7 @@ func qdayStage(cs consensus.State) (stage string, remaining uint64) {
 func (a *app) status(r *http.Request) (any, error) {
 	cs := a.cm.TipState()
 	tip := cs.Index
-	observedHashrate, hashrateWindow := a.observedHashrate(tip, cs, 120)
+	observedHashrate, hashrateWindow := a.observedHashrate(tip, cs, 60)
 	indexed, err := a.wm.Tip()
 	if err != nil {
 		return nil, err
